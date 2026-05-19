@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Задания добавляются по мере появления сервисов:
+#   rubezh-api (Go) — итерация 5;  rubezh-web (frontend) — итерация 12.
+
+jobs:
+  sanitizer:
+    name: rubezh-sanitizer — тесты, линт, типы
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rubezh-sanitizer
+    steps:
+      - uses: actions/checkout@v4
+      - name: Установить uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.6.12"
+      - name: Синхронизировать зависимости
+        run: uv sync --frozen
+      - name: Линт — ruff
+        run: uv run ruff check app tests
+      - name: Проверка типов — mypy
+        run: uv run mypy app
+      - name: Тесты — pytest
+        run: uv run pytest
+
+  migrations:
+    name: Миграции БД и проверка схемы
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: rubezh
+          POSTGRES_PASSWORD: rubezh
+          POSTGRES_DB: rubezh
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rubezh -d rubezh"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Применить миграции
+        run: >-
+          docker run --rm --network host
+          -v "${{ github.workspace }}/rubezh-api/migrations:/migrations:ro"
+          migrate/migrate:v4.18.1
+          -path=/migrations
+          -database="postgres://rubezh:rubezh@localhost:5432/rubezh?sslmode=disable" up
+      - name: Проверить схему БД
+        env:
+          PGPASSWORD: rubezh
+        run: >-
+          psql -h localhost -U rubezh -d rubezh -v ON_ERROR_STOP=1
+          -f rubezh-api/migrations/tests/verify_schema.sql
+
+  compose:
+    name: Сборка образов и проверка docker compose
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Проверить конфигурацию compose
+        run: docker compose config --quiet
+      - name: Собрать образ rubezh-sanitizer
+        run: docker compose build rubezh-sanitizer
