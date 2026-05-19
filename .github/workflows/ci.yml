@@ -61,6 +61,27 @@ jobs:
           psql -h localhost -U rubezh -d rubezh -v ON_ERROR_STOP=1
           -f rubezh-api/migrations/tests/verify_schema.sql
 
+  api:
+    name: rubezh-api — сборка, тесты, vet, формат
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rubezh-api
+    steps:
+      - uses: actions/checkout@v4
+      - name: Установить Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: Сборка
+        run: go build ./...
+      - name: Проверка формата — gofmt
+        run: test -z "$(gofmt -l .)"
+      - name: Статический анализ — go vet
+        run: go vet ./...
+      - name: Тесты
+        run: go test ./...
+
   compose:
     name: Сборка образов и проверка docker compose
     runs-on: ubuntu-latest
@@ -70,3 +91,5 @@ jobs:
         run: docker compose config --quiet
       - name: Собрать образ rubezh-sanitizer
         run: docker compose build rubezh-sanitizer
+      - name: Собрать образ rubezh-api
+        run: docker compose build rubezh-api

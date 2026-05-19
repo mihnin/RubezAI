@@ -1,0 +1,3 @@
+migrations/
+bin/
+*_test.go
