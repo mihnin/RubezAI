@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 from app.detectors.base import Detector
+from app.detectors.commercial import commercial_detectors
 from app.detectors.pii import pii_detectors
+from app.detectors.secrets import secret_detectors
 from app.domain.entities import Match
 
 
 def default_detectors() -> list[Detector]:
-    """Активные детекторы. На итерации 2 — только ПДн.
-
-    Детекторы секретов и коммерческих данных подключаются в итерации 3.
-    """
-    return list(pii_detectors())
+    """Активные детекторы: ПДн, секреты, коммерчески чувствительные данные."""
+    detectors: list[Detector] = [
+        *pii_detectors(),
+        *secret_detectors(),
+        *commercial_detectors(),
+    ]
+    return detectors
 
 
 def scan(text: str, detectors: list[Detector] | None = None) -> list[Match]:

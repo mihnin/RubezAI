@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 
@@ -27,6 +27,16 @@ class EntityType(StrEnum):
     OGRN = "OGRN"
     BIK = "BIK"
     ACCOUNT = "ACCOUNT"
+    SECRET_API_KEY = "SECRET_API_KEY"
+    SECRET_JWT = "SECRET_JWT"
+    SECRET_OAUTH = "SECRET_OAUTH"
+    SECRET_PASSWORD = "SECRET_PASSWORD"
+    SECRET_DSN = "SECRET_DSN"
+    SECRET_CONN_STRING = "SECRET_CONN_STRING"
+    COMMERCIAL_AMOUNT = "COMMERCIAL_AMOUNT"
+    COMMERCIAL_CONTRACT = "COMMERCIAL_CONTRACT"
+    COMMERCIAL_SUPPLIER = "COMMERCIAL_SUPPLIER"
+    COMMERCIAL_TERMS = "COMMERCIAL_TERMS"
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,12 +45,14 @@ class Match:
 
     Поле ``value`` содержит raw-значение и существует только в памяти процесса —
     наружу (в API и логи) оно не отдаётся (см. docs/THREAT_MODEL.md, T2).
+    Из ``repr`` оно исключено (``field(repr=False)``) — логировать ``Match``
+    безопасно.
     """
 
     type: EntityType
     category: Category
     start: int
     end: int
-    value: str
+    value: str = field(repr=False)
     detector: str
     confidence: float

@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import re
-from collections.abc import Callable
-
-from app.domain.entities import Category, EntityType, Match
+from app.detectors.regex_detector import RegexDetector
+from app.domain.entities import Category, EntityType
 
 # --- валидаторы контрольных сумм ---
 
@@ -62,53 +60,6 @@ def validate_ogrn(value: str) -> bool:
     return False
 
 
-# --- детектор на основе регулярного выражения ---
-
-
-class RegexDetector:
-    """Детектор сущности по регулярному выражению с опциональной валидацией.
-
-    Если задан ``validator``, кандидат принимается только при прохождении
-    проверки (например, контрольной суммы) — это снижает ложные срабатывания.
-    """
-
-    def __init__(
-        self,
-        *,
-        name: str,
-        entity_type: EntityType,
-        category: Category,
-        pattern: str,
-        validator: Callable[[str], bool] | None = None,
-        confidence: float = 1.0,
-    ) -> None:
-        self.name = name
-        self.entity_type = entity_type
-        self.category = category
-        self._regex = re.compile(pattern)
-        self._validator = validator
-        self._confidence = confidence
-
-    def detect(self, text: str) -> list[Match]:
-        matches: list[Match] = []
-        for found in self._regex.finditer(text):
-            value = found.group(0)
-            if self._validator is not None and not self._validator(value):
-                continue
-            matches.append(
-                Match(
-                    type=self.entity_type,
-                    category=self.category,
-                    start=found.start(),
-                    end=found.end(),
-                    value=value,
-                    detector="regex",
-                    confidence=self._confidence,
-                )
-            )
-        return matches
-
-
 # --- шаблоны ПДн ---
 
 # ФИО: три слова с заглавной (Иванов Иван Иванович) либо «Фамилия И. О.».
@@ -120,7 +71,7 @@ _PERSON_PATTERN = (
 
 
 def pii_detectors() -> list[RegexDetector]:
-    """Все regex-детекторы ПДн (итерация 2)."""
+    """Все regex-детекторы ПДн."""
     pii = Category.PII
     return [
         RegexDetector(
