@@ -22,9 +22,13 @@ import (
 // (контракт chat.schema.json, ChatRequest.message.maxLength).
 const _maxChatMessageRunes = 16384
 
-// chatOrchestrator — зависимость обработчика /api/chat.
+// chatOrchestrator — зависимость обработчика /api/chat. Разделён на
+// Prepare (до открытия SSE) и Stream (после) — это позволяет отдавать
+// HTTP 5xx на ошибки подготовки, а не event:error поверх 200/SSE.
 type chatOrchestrator interface {
-	Handle(ctx context.Context, req chat.Request, sink chat.EventSink) error
+	Prepare(ctx context.Context, req chat.Request) (chat.Prepared, error)
+	Stream(ctx context.Context, req chat.Request,
+		prepared chat.Prepared, sink chat.EventSink) error
 }
 
 // --- DTO HTTP-слоя, согласованные с docs/contracts/chat.schema.json ---
@@ -249,17 +253,6 @@ func chatHandler(
 			return
 		}
 
-		flusher, ok := w.(http.Flusher)
-		if !ok {
-			http.Error(w, "стриминг не поддерживается",
-				http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("X-Accel-Buffering", "no")
-		w.WriteHeader(http.StatusOK)
-
 		chatReq := chat.Request{
 			RequestID:  newRequestID(),
 			SessionID:  session.ID,
@@ -271,9 +264,32 @@ func chatHandler(
 			ModelTrust: provider.TrustLevel,
 			Model:      modelOrDefault(dto.Model, provider.Name),
 		}
-		if err := orch.Handle(r.Context(), chatReq,
-			&sseSink{w: w, flusher: flusher}); err != nil {
-			logger.Error("ошибка обработки чат-запроса",
+
+		// Подготовка — может вернуть ошибку ДО открытия SSE. Тогда отдаём
+		// HTTP-код (без SSE-заголовков); chat_error уже записан внутри.
+		prepared, err := orch.Prepare(r.Context(), chatReq)
+		if err != nil {
+			http.Error(w, "ошибка подготовки запроса",
+				http.StatusBadGateway)
+			logger.Warn("подготовка чат-запроса не удалась",
+				"error", err, "request_id", chatReq.RequestID)
+			return
+		}
+
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "стриминг не поддерживается",
+				http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("X-Accel-Buffering", "no")
+		w.WriteHeader(http.StatusOK)
+
+		sink := &sseSink{w: w, flusher: flusher}
+		if err := orch.Stream(r.Context(), chatReq, prepared, sink); err != nil {
+			logger.Error("ошибка стриминга чат-запроса",
 				"error", err, "request_id", chatReq.RequestID)
 		}
 	}

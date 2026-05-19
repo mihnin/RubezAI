@@ -109,6 +109,21 @@ func (o *Orchestrator) policyErrorEvent(
 	return ev
 }
 
+// sanitizedErrorEvent — chat_error после успешного sanitize, до принятия
+// решения политики: включает риск из preview, но не decision/matched_rule.
+// Используется при сбое построения карты псевдонимов.
+func (o *Orchestrator) sanitizedErrorEvent(
+	req Request, preview sanitizer.PreviewResponse, detail map[string]any,
+) storage.AuditEvent {
+	ev := o.errorEvent(req, detail)
+	level := preview.Risk.Level
+	payload := preview.SanitizedText
+	ev.RiskLevel = &level
+	ev.RiskClasses = preview.Risk.Classes
+	ev.MaskedPayload = &payload
+	return ev
+}
+
 // metaFor строит MetaEvent; для summary добавляет поясняющую причину.
 func metaFor(
 	req Request, preview sanitizer.PreviewResponse, outcome policy.Outcome,

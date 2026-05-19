@@ -25,16 +25,18 @@ func (f *fakeSanitizer) Preview(
 }
 
 type fakeLLM struct {
-	resp    llm.ChatResponse
-	err     error
-	called  bool
-	gotText string
+	resp        llm.ChatResponse
+	err         error
+	called      bool
+	gotText     string
+	gotMessages []llm.ChatMessage
 }
 
 func (f *fakeLLM) Complete(
 	_ context.Context, _ string, req llm.ChatRequest,
 ) (llm.ChatResponse, error) {
 	f.called = true
+	f.gotMessages = req.Messages
 	if len(req.Messages) > 0 {
 		f.gotText = req.Messages[len(req.Messages)-1].Content
 	}
@@ -240,7 +242,13 @@ func TestOrchestratorSummaryOnly(t *testing.T) {
 	}
 	// в summary-режиме restore не выполняется — пользователь видит псевдоним
 	if sink.text() != "Кратко про ФИО_001" {
-		t.Errorf("ответ = %q, в summary псевдонимы не восстанавливаются", sink.text())
+		t.Errorf("ответ = %q, в summary псевдонимы не восстанавливаются",
+			sink.text())
+	}
+	// system-промпт предваряет user-сообщение (план Р3, MAJOR-3)
+	if len(lm.gotMessages) != 2 || lm.gotMessages[0].Role != "system" {
+		t.Errorf("summary mode должен слать system+user, получено %+v",
+			lm.gotMessages)
 	}
 }
 
@@ -361,5 +369,92 @@ func TestOrchestratorTerminationError(t *testing.T) {
 	if errAudit.Detail["llm_completed"] != true {
 		t.Errorf("chat_error при сбое Tx2 должен нести llm_completed=true: %v",
 			errAudit.Detail)
+	}
+	if errAudit.Detail["audit_persist_failed"] != true {
+		t.Errorf("chat_error при сбое Tx2 должен нести audit_persist_failed=true: %v",
+			errAudit.Detail)
+	}
+}
+
+// strictCtxStore проверяет, что переданный ctx живой (не отменён). Имитирует
+// поведение реальной БД: cancelled ctx → ошибка соединения.
+type strictCtxStore struct {
+	inner fakeStore
+}
+
+func (s *strictCtxStore) RecordChatRequest(
+	ctx context.Context, rec storage.ChatRequestRecord,
+) (storage.ChatRequestIDs, error) {
+	if err := ctx.Err(); err != nil {
+		return storage.ChatRequestIDs{}, err
+	}
+	return s.inner.RecordChatRequest(ctx, rec)
+}
+
+func (s *strictCtxStore) RecordChatTermination(
+	ctx context.Context, rec storage.ChatTerminationRecord,
+) (storage.ChatTerminationIDs, error) {
+	if err := ctx.Err(); err != nil {
+		return storage.ChatTerminationIDs{}, err
+	}
+	return s.inner.RecordChatTermination(ctx, rec)
+}
+
+func (s *strictCtxStore) InsertAuditEvent(
+	ctx context.Context, ev storage.AuditEvent,
+) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return s.inner.InsertAuditEvent(ctx, ev)
+}
+
+// TestOrchestratorDetachedTerminationCtx — план §Р6: терминальный аудит
+// пишется context.WithoutCancel; отмена клиентом не должна срывать запись.
+func TestOrchestratorDetachedTerminationCtx(t *testing.T) {
+	san := &fakeSanitizer{resp: maskedPreview()}
+	lm := &fakeLLM{resp: llm.ChatResponse{Content: "Ответ про ФИО_001"}}
+	store := &strictCtxStore{}
+	sink := &fakeSink{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // ctx уже отменён — БД отклонила бы запросы на нём
+	if err := NewOrchestrator(san, lm, store).Handle(ctx, baseRequest(), sink); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	got := store.inner.auditTypes()
+	if len(got) != 2 || got[0] != "chat_request" || got[1] != "chat_response" {
+		t.Errorf("отменённый ctx сорвал запись Tx1/Tx2: аудит = %v", got)
+	}
+}
+
+// TestOrchestratorRejectsOverlappingSpans — план Р2: пересекающиеся спаны
+// в ответе sanitizer должны давать fail-closed.
+func TestOrchestratorRejectsOverlappingSpans(t *testing.T) {
+	msg := "Иванов Иванович"
+	san := &fakeSanitizer{resp: sanitizer.PreviewResponse{
+		SanitizedText: "[mask]",
+		Entities: []sanitizer.Entity{
+			entity(msg, 0, 6, "PERSON", "ФИО_001"),
+			entity(msg, 3, 9, "PERSON", "ФИО_002"), // пересекается с 0..6
+		},
+		Risk: sanitizer.Risk{Score: 0.5, Level: "medium", Classes: []string{"pii"}},
+	}}
+	lm := &fakeLLM{}
+	store := &fakeStore{}
+	sink := &fakeSink{}
+
+	if err := NewOrchestrator(san, lm, store).Handle(
+		context.Background(), baseRequest(), sink); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if sink.failMsg == "" {
+		t.Error("пересекающиеся спаны должны давать SSE error (fail-closed)")
+	}
+	if lm.called {
+		t.Error("при пересекающихся спанах LLM не должен вызываться")
+	}
+	if got := store.auditTypes(); len(got) != 1 || got[0] != "chat_error" {
+		t.Errorf("аудит = %v, ожидалось [chat_error]", got)
 	}
 }

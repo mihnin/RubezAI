@@ -21,19 +21,30 @@ func (m PseudonymMap) Len() int { return len(m.toRaw) }
 
 // BuildPseudonymMap строит карту псевдонимов из исходного текста и сущностей.
 // Спаны индексируют исходный текст по код-поинтам (инвариант контракта
-// sanitize.schema.json). Fail-closed: нарушение границ спана либо
-// несоответствие raw_hash срезу → ошибка, запрос дальше не идёт.
+// sanitize.schema.json). Fail-closed: нарушение границ спана, пересечение
+// спанов либо несоответствие raw_hash срезу → ошибка, запрос дальше не идёт.
 func BuildPseudonymMap(
 	originalText string, entities []sanitizer.Entity,
 ) (PseudonymMap, error) {
 	runes := []rune(originalText)
 	n := len(runes)
-	toRaw := make(map[string]string, len(entities))
-	for _, e := range entities {
+	// сортируем копию по Start для проверки непересечения
+	sorted := append([]sanitizer.Entity(nil), entities...)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Start < sorted[j].Start
+	})
+	toRaw := make(map[string]string, len(sorted))
+	prevEnd := 0
+	for _, e := range sorted {
 		if e.Start < 0 || e.End <= e.Start || e.End > n {
 			return PseudonymMap{}, fmt.Errorf(
 				"chat: спан сущности %s [%d,%d) вне границ [0,%d)",
 				e.Type, e.Start, e.End, n)
+		}
+		if e.Start < prevEnd {
+			return PseudonymMap{}, fmt.Errorf(
+				"chat: спан сущности %s [%d,%d) пересекает предыдущий (конец %d)",
+				e.Type, e.Start, e.End, prevEnd)
 		}
 		raw := string(runes[e.Start:e.End])
 		sum := sha256.Sum256([]byte(raw))
@@ -43,6 +54,7 @@ func BuildPseudonymMap(
 					"(текст или индексация рассинхронизированы)", e.Type)
 		}
 		toRaw[e.Pseudonym] = raw
+		prevEnd = e.End
 	}
 	return PseudonymMap{toRaw: toRaw}, nil
 }

@@ -1,6 +1,9 @@
 package chat
 
-import "github.com/rubezh-ai/rubezh-api/internal/policy"
+import (
+	"github.com/rubezh-ai/rubezh-api/internal/llm"
+	"github.com/rubezh-ai/rubezh-api/internal/policy"
+)
 
 // action — что оркестратору делать с решением политики.
 type action struct {
@@ -24,4 +27,17 @@ func actionFor(
 	default: // deny, escalate
 		return action{callLLM: false}
 	}
+}
+
+// buildLLMMessages формирует список сообщений для LLM. Для summary-режима
+// предваряет user-сообщение system-инструкцией; гарантию безопасности даёт
+// отсутствие restore (план Р3, MAJOR-3).
+func buildLLMMessages(act action) []llm.ChatMessage {
+	if act.summaryMode {
+		return []llm.ChatMessage{
+			{Role: "system", Content: "Ответь кратким резюме, не повторяя детали."},
+			{Role: "user", Content: act.sendText},
+		}
+	}
+	return []llm.ChatMessage{{Role: "user", Content: act.sendText}}
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -56,15 +57,24 @@ func registerProvider(t *testing.T, store *storage.Storage, router *llm.Router) 
 }
 
 // fakeChatOrchestrator — заглушка оркестратора для тестов HTTP-слоя.
+// Реализует Prepare/Stream — раздельная подготовка и стрим (MAJOR-2 плана).
 type fakeChatOrchestrator struct {
-	gotReq    chat.Request
-	handleErr error
+	gotReq     chat.Request
+	prepareErr error
+	streamErr  error
 }
 
-func (f *fakeChatOrchestrator) Handle(
-	_ context.Context, req chat.Request, sink chat.EventSink,
-) error {
+func (f *fakeChatOrchestrator) Prepare(
+	_ context.Context, req chat.Request,
+) (chat.Prepared, error) {
 	f.gotReq = req
+	return chat.Prepared{}, f.prepareErr
+}
+
+func (f *fakeChatOrchestrator) Stream(
+	_ context.Context, req chat.Request,
+	_ chat.Prepared, sink chat.EventSink,
+) error {
 	_ = sink.Meta(chat.MetaEvent{
 		Decision: "allow_raw", Provider: req.Provider, Reasons: []string{},
 	})
@@ -72,7 +82,7 @@ func (f *fakeChatOrchestrator) Handle(
 	if err := sink.Done(req.RequestID); err != nil {
 		return err
 	}
-	return f.handleErr
+	return f.streamErr
 }
 
 // chatTestHandler собирает обработчик /api/chat с auth для прямого вызова.
@@ -245,6 +255,34 @@ func TestChatSessionsRequireAuth(t *testing.T) {
 		http.MethodGet, "/api/chat/sessions", nil))
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("code = %d, ожидалось 401", rec.Code)
+	}
+}
+
+func TestChatHandlerPrepareError(t *testing.T) {
+	// Сбой подготовки (sanitizer/Tx1/спан) — HTTP 502, без SSE-заголовков
+	// и без event:* в теле. Закрывает MAJOR-2 ревью архитектора.
+	store, closeStore := dbStore(t)
+	defer closeStore()
+	router := llm.NewRouter()
+	name := registerProvider(t, store, router)
+	orch := &fakeChatOrchestrator{prepareErr: errors.New("sanitizer недоступен")}
+
+	body := `{"message":"привет","provider":"` + name + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/chat",
+		bytes.NewBufferString(body))
+	req.Header.Set("Authorization", userToken())
+	rec := httptest.NewRecorder()
+	chatTestHandler(orch, store, router).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("сбой подготовки: code = %d, ожидалось 502", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct == "text/event-stream" {
+		t.Error("SSE-заголовки не должны выставляться при сбое подготовки")
+	}
+	if strings.Contains(rec.Body.String(), "event:") {
+		t.Errorf("при сбое подготовки не должны отправляться SSE-события: %s",
+			rec.Body.String())
 	}
 }
 
