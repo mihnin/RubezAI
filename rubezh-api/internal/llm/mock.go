@@ -29,8 +29,9 @@ func (p *MockProvider) Complete(
 			lastUser = message.Content
 		}
 	}
-	return ChatResponse{
-		Content: "[mock] обработан запрос: " + lastUser,
-		Model:   req.Model,
-	}, nil
+	content := "[mock] обработан запрос: " + lastUser
+	if lastUser == "" {
+		content = "[mock] запрос без пользовательского сообщения"
+	}
+	return ChatResponse{Content: content, Model: req.Model}, nil
 }

@@ -63,8 +63,8 @@ func TestMockProviderNoUserMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
-	if resp.Content != "[mock] обработан запрос: " {
-		t.Errorf("Content = %q (ожидался пустой запрос)", resp.Content)
+	if resp.Content != "[mock] запрос без пользовательского сообщения" {
+		t.Errorf("Content = %q (ожидался маркер пустого запроса)", resp.Content)
 	}
 }
 

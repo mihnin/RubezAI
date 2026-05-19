@@ -308,3 +308,52 @@ func TestModelsResponseDoesNotLeakApiKey(t *testing.T) {
 		}
 	}
 }
+
+func TestCreateModelRejectsMalformedEndpoint(t *testing.T) {
+	router, closeStore := dbRouter(t)
+	defer closeStore()
+	for _, endpoint := range []string{
+		"не-url", "ftp://llm.local", "llm.local", "http://", "https://",
+	} {
+		body := `{"name":"x","trust_level":"external",` +
+			`"adapter":"openai_compatible","endpoint":"` + endpoint + `"}`
+		req := httptest.NewRequest(http.MethodPost, "/api/models",
+			bytes.NewBufferString(body))
+		req.Header.Set("Authorization", userToken())
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("endpoint %q: code = %d, ожидалось 400", endpoint, rec.Code)
+		}
+	}
+}
+
+func TestCreateModelRejectsUnknownField(t *testing.T) {
+	router, closeStore := dbRouter(t)
+	defer closeStore()
+	// неизвестное поле в теле должно отклоняться (DisallowUnknownFields)
+	body := `{"name":"x","trust_level":"external","adapter":"mock","trust_lvl":"oops"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/models",
+		bytes.NewBufferString(body))
+	req.Header.Set("Authorization", userToken())
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("неизвестное поле: code = %d, ожидалось 400", rec.Code)
+	}
+}
+
+func TestCreateModelRejectsTrailingData(t *testing.T) {
+	router, closeStore := dbRouter(t)
+	defer closeStore()
+	// хвостовые данные после JSON-значения должны отклоняться
+	body := `{"name":"x","trust_level":"external","adapter":"mock"}{"name":"y"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/models",
+		bytes.NewBufferString(body))
+	req.Header.Set("Authorization", userToken())
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("хвостовые данные: code = %d, ожидалось 400", rec.Code)
+	}
+}

@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -40,7 +42,7 @@ type OpenAIProvider struct {
 func NewOpenAIProvider(name, endpoint, apiKey string) *OpenAIProvider {
 	return &OpenAIProvider{
 		name:     name,
-		endpoint: endpoint,
+		endpoint: strings.TrimRight(endpoint, "/"),
 		apiKey:   apiKey,
 		client:   &http.Client{Timeout: _openAITimeout},
 	}
@@ -70,6 +72,7 @@ func (p *OpenAIProvider) Complete(
 		return ChatResponse{}, fmt.Errorf("llm: формирование запроса: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
 
 	resp, err := p.client.Do(httpReq)
@@ -79,8 +82,10 @@ func (p *OpenAIProvider) Complete(
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return ChatResponse{}, fmt.Errorf(
-			"llm: провайдер %q вернул HTTP %d", p.name, resp.StatusCode)
+			"llm: провайдер %q вернул HTTP %d: %s",
+			p.name, resp.StatusCode, snippet)
 	}
 	var parsed openAIResponse
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {

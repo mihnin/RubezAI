@@ -139,11 +139,27 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	_ = json.NewEncoder(w).Encode(body)
 }
 
+// decodeJSON строго читает JSON-тело запроса: ограничивает размер (1 МиБ),
+// отклоняет неизвестные поля и хвостовые данные после JSON-значения.
+// Используется всеми POST-обработчиками.
+func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(dst); err != nil {
+		return err
+	}
+	if decoder.More() {
+		return errors.New("тело содержит лишние данные после JSON-значения")
+	}
+	return nil
+}
+
 // policyTestHandler прогоняет встроенную политику на присланном PolicyInput
 // (эндпойнт «тест политики на примере запроса»).
 func policyTestHandler(w http.ResponseWriter, r *http.Request) {
 	var input policyInputDTO
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+	if err := decodeJSON(w, r, &input); err != nil {
 		http.Error(w, "некорректный JSON", http.StatusBadRequest)
 		return
 	}
@@ -175,7 +191,7 @@ func listPoliciesHandler(store *storage.Storage) http.HandlerFunc {
 func createPolicyHandler(store *storage.Storage) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req createPolicyRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := decodeJSON(w, r, &req); err != nil {
 			http.Error(w, "некорректный JSON", http.StatusBadRequest)
 			return
 		}

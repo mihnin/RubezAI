@@ -5,8 +5,8 @@ on:
     branches: [main]
   pull_request:
 
-# Задания добавляются по мере появления сервисов:
-#   rubezh-api (Go) — итерация 5;  rubezh-web (frontend) — итерация 12.
+# Задания: sanitizer, api, migrations, compose.
+# Задание rubezh-web (frontend) добавится в итерации 12.
 
 jobs:
   sanitizer:

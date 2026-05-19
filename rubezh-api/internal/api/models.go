@@ -1,10 +1,10 @@
 package api
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/rubezh-ai/rubezh-api/internal/storage"
@@ -46,8 +46,16 @@ func (r createModelRequest) validate() error {
 	if !validAdapter[r.Adapter] {
 		return fmt.Errorf("недопустимый adapter: %q", r.Adapter)
 	}
-	if r.Adapter == "openai_compatible" && r.Endpoint == "" {
-		return errors.New("для adapter openai_compatible требуется endpoint")
+	if r.Adapter == "openai_compatible" {
+		if r.Endpoint == "" {
+			return errors.New("для adapter openai_compatible требуется endpoint")
+		}
+		parsed, err := url.ParseRequestURI(r.Endpoint)
+		if err != nil || parsed.Host == "" ||
+			(parsed.Scheme != "http" && parsed.Scheme != "https") {
+			return fmt.Errorf(
+				"endpoint должен быть корректным http(s)-URL: %q", r.Endpoint)
+		}
 	}
 	if r.MaxTokens != nil && *r.MaxTokens <= 0 {
 		return errors.New("max_tokens должен быть положительным")
@@ -93,7 +101,7 @@ func listModelsHandler(store *storage.Storage) http.HandlerFunc {
 func createModelHandler(store *storage.Storage) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req createModelRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := decodeJSON(w, r, &req); err != nil {
 			http.Error(w, "некорректный JSON", http.StatusBadRequest)
 			return
 		}

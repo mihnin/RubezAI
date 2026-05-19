@@ -68,6 +68,10 @@ func main() {
 
 // buildRouter регистрирует провайдеров LLM по конфигурации из БД.
 // Отключённые (is_enabled = false) провайдеры пропускаются.
+//
+// MVP-ограничение: все openai_compatible-провайдеры получают общий apiKey
+// (LLM_API_KEY). Отдельный ключ на каждого провайдера — зафиксированный
+// техдолг (docs/PLAN.md, секция «Технический долг»).
 func buildRouter(providers []storage.ModelProvider, apiKey string) *llm.Router {
 	router := llm.NewRouter()
 	for _, provider := range providers {

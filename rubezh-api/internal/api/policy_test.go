@@ -200,6 +200,21 @@ func TestPolicyTestEndpointRejectsUnknownEnum(t *testing.T) {
 	}
 }
 
+func TestPolicyTestEndpointRejectsUnknownField(t *testing.T) {
+	// неизвестное поле в теле отклоняется (DisallowUnknownFields)
+	body := `{"model_trust":"external","risk":{"level":"low","classes":[],` +
+		`"score":0},"entity_types":[],"user_role":"user","context":"chat",` +
+		`"injected":"вредонос"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/policies/test",
+		bytes.NewBufferString(body))
+	req.Header.Set("Authorization", userToken())
+	rec := httptest.NewRecorder()
+	apiTestRouter().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("неизвестное поле: code = %d, ожидалось 400", rec.Code)
+	}
+}
+
 // dbRouter строит роутер с реальным Store или пропускает тест без БД.
 func dbRouter(t *testing.T) (http.Handler, func()) {
 	t.Helper()

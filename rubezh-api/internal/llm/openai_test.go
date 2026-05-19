@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -72,13 +73,18 @@ func TestOpenAIProviderSendsCorrectRequest(t *testing.T) {
 }
 
 func TestOpenAIProviderNon200(t *testing.T) {
-	server := fakeOpenAI(t, http.StatusInternalServerError, "{}")
+	server := fakeOpenAI(t, http.StatusInternalServerError,
+		`{"error":"внутренняя ошибка провайдера"}`)
 	defer server.Close()
 	_, err := NewOpenAIProvider("p", server.URL, "test-key").Complete(
 		context.Background(),
 		ChatRequest{Messages: []ChatMessage{{Role: "user", Content: "x"}}})
 	if err == nil {
-		t.Error("HTTP 500 от провайдера должен давать ошибку")
+		t.Fatal("HTTP 500 от провайдера должен давать ошибку")
+	}
+	// тело ответа провайдера должно попадать в текст ошибки (диагностика)
+	if !strings.Contains(err.Error(), "внутренняя ошибка провайдера") {
+		t.Errorf("ошибка не содержит тело ответа провайдера: %v", err)
 	}
 }
 
@@ -135,11 +141,12 @@ func TestOpenAIProviderMalformedURL(t *testing.T) {
 }
 
 func TestOpenAIProviderRequestMethodAndHeaders(t *testing.T) {
-	var method, path, contentType, auth string
+	var method, path, contentType, accept, auth string
 	server := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			method, path = r.Method, r.URL.Path
 			contentType = r.Header.Get("Content-Type")
+			accept = r.Header.Get("Accept")
 			auth = r.Header.Get("Authorization")
 			_, _ = io.WriteString(w, validOpenAIResponse)
 		}))
@@ -153,8 +160,26 @@ func TestOpenAIProviderRequestMethodAndHeaders(t *testing.T) {
 	if contentType != "application/json" {
 		t.Errorf("Content-Type = %q", contentType)
 	}
+	if accept != "application/json" {
+		t.Errorf("Accept = %q, ожидалось application/json", accept)
+	}
 	if auth != "Bearer my-key" {
 		t.Errorf("Authorization = %q", auth)
+	}
+}
+
+func TestOpenAIProviderTrimsTrailingSlash(t *testing.T) {
+	server := fakeOpenAI(t, http.StatusOK, validOpenAIResponse)
+	defer server.Close()
+	// завершающий слэш в endpoint не должен ломать путь /chat/completions
+	resp, err := NewOpenAIProvider("p", server.URL+"/", "test-key").Complete(
+		context.Background(),
+		ChatRequest{Messages: []ChatMessage{{Role: "user", Content: "x"}}})
+	if err != nil {
+		t.Fatalf("завершающий слэш в endpoint сломал запрос: %v", err)
+	}
+	if resp.Content != "ответ модели" {
+		t.Errorf("Content = %q", resp.Content)
 	}
 }
 
