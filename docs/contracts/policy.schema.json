@@ -59,9 +59,5 @@
         }
       }
     }
-  },
-  "oneOf": [
-    { "$ref": "#/$defs/PolicyInput" },
-    { "$ref": "#/$defs/PolicyDecision" }
-  ]
+  }
 }

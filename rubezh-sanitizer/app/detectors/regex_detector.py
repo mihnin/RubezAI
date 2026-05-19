@@ -19,6 +19,8 @@ class RegexDetector:
     - ``group`` — номер группы захвата для значения и границ (0 — всё
       совпадение). Группа > 0 позволяет выделить лишь секрет из конструкции
       вида ``password=<секрет>``, не захватывая ключевое слово.
+    - ``method`` — метод детекции для поля ``Match.detector`` (regex /
+      dictionary / ner / llm_review), согласован с sanitize.schema.json.
     """
 
     def __init__(
@@ -31,6 +33,7 @@ class RegexDetector:
         validator: Callable[[str], bool] | None = None,
         confidence: float = 1.0,
         group: int = 0,
+        method: str = "regex",
     ) -> None:
         self.name = name
         self.entity_type = entity_type
@@ -39,6 +42,7 @@ class RegexDetector:
         self._validator = validator
         self._confidence = confidence
         self._group = group
+        self._method = method
 
     def detect(self, text: str) -> list[Match]:
         matches: list[Match] = []
@@ -55,7 +59,7 @@ class RegexDetector:
                     start=found.start(self._group),
                     end=found.end(self._group),
                     value=value,
-                    detector="regex",
+                    detector=self._method,
                     confidence=self._confidence,
                 )
             )

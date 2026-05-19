@@ -16,7 +16,7 @@
     },
     "Entity": {
       "type": "object",
-      "description": "Найденная сущность. Инвариант обратимости: pseudonym и raw_hash (SHA-256 исходного значения) присутствуют всегда; восстановление raw возможно только через зашифрованную запись pseudonym_mappings, на которую ссылается SanitizeResponse.mapping_id. Само raw-значение в контракте никогда не передаётся.",
+      "description": "Найденная сущность. Инвариант обратимости: pseudonym и raw_hash (SHA-256 исходного значения) присутствуют всегда; восстановление raw возможно только через зашифрованную запись pseudonym_mappings, на которую ссылается SanitizeResponse.mapping_id. Само raw-значение в контракте никогда не передаётся. Инвариант спана: 0 <= start < end <= длины исходного текста (проверяется контрактным тестом).",
       "additionalProperties": false,
       "required": ["type", "category", "start", "end", "pseudonym", "raw_hash", "confidence", "detector"],
       "properties": {
@@ -69,9 +69,5 @@
         }
       }
     }
-  },
-  "oneOf": [
-    { "$ref": "#/$defs/SanitizeRequest" },
-    { "$ref": "#/$defs/SanitizeResponse" }
-  ]
+  }
 }

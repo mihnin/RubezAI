@@ -79,6 +79,7 @@ services:
     build: ./rubezh-sanitizer
     environment:
       SANITIZER_PORT: 8001
+      MAPPING_ENCRYPTION_KEY: ${MAPPING_ENCRYPTION_KEY:-}
     ports:
       - "${SANITIZER_PORT:-8001}:8001"
     healthcheck:
