@@ -52,10 +52,11 @@ func main() {
 	srv := &http.Server{
 		Addr: ":" + cfg.HTTPPort,
 		Handler: api.NewRouter(api.Deps{
-			Logger:     logger,
-			Store:      store,
-			AuthSecret: cfg.AuthSecret,
-			Router:     llmRouter,
+			Logger:       logger,
+			Store:        store,
+			AuthSecret:   cfg.AuthSecret,
+			Router:       llmRouter,
+			SanitizerURL: cfg.SanitizerURL,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

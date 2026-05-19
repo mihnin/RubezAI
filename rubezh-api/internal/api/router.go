@@ -10,21 +10,27 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/rubezh-ai/rubezh-api/internal/auth"
+	"github.com/rubezh-ai/rubezh-api/internal/chat"
 	"github.com/rubezh-ai/rubezh-api/internal/llm"
+	"github.com/rubezh-ai/rubezh-api/internal/sanitizer"
 	"github.com/rubezh-ai/rubezh-api/internal/storage"
 )
 
 // Deps — зависимости HTTP-слоя.
 type Deps struct {
-	Logger     *slog.Logger
-	Store      *storage.Storage
-	AuthSecret string
-	Router     *llm.Router // LLM Router; используется /api/chat (итерация 8)
+	Logger       *slog.Logger
+	Store        *storage.Storage
+	AuthSecret   string
+	Router       *llm.Router // LLM Router; используется /api/chat
+	SanitizerURL string      // базовый URL сервиса rubezh-sanitizer
 }
 
 // NewRouter собирает HTTP-роутер сервиса. Маршруты /api защищены
 // auth-middleware; /health — публичная проба.
 func NewRouter(deps Deps) http.Handler {
+	orchestrator := chat.NewOrchestrator(
+		sanitizer.NewClient(deps.SanitizerURL), deps.Router, deps.Store)
+
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
@@ -38,6 +44,10 @@ func NewRouter(deps Deps) http.Handler {
 		api.Post("/policies", createPolicyHandler(deps.Store))
 		api.Get("/models", listModelsHandler(deps.Store))
 		api.Post("/models", createModelHandler(deps.Store))
+		api.Get("/chat/sessions", listChatSessionsHandler(deps.Store))
+		api.Post("/chat/sessions", createChatSessionHandler(deps.Store))
+		api.Post("/chat", chatHandler(
+			orchestrator, deps.Store, deps.Router, deps.Logger))
 	})
 	return r
 }
