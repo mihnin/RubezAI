@@ -62,12 +62,19 @@ func ParseToken(token, secret string) (Role, error) {
 	return role, nil
 }
 
+const bearerPrefix = "Bearer "
+
 // Middleware проверяет Bearer-токен и кладёт роль в контекст запроса.
+// Заголовок Authorization обязан начинаться со схемы "Bearer " (регистр важен).
 func Middleware(secret string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-			role, err := ParseToken(token, secret)
+			header := r.Header.Get("Authorization")
+			if !strings.HasPrefix(header, bearerPrefix) {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			role, err := ParseToken(strings.TrimPrefix(header, bearerPrefix), secret)
 			if err != nil {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return

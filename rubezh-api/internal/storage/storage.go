@@ -13,7 +13,8 @@ type Storage struct {
 	pool *pgxpool.Pool
 }
 
-// New открывает пул соединений по DSN. DSN валидируется немедленно.
+// New открывает пул соединений по DSN. Немедленно валидируется только
+// синтаксис DSN; соединение ленивое — доступность БД проверяет Ping.
 func New(ctx context.Context, dsn string) (*Storage, error) {
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {

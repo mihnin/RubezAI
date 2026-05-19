@@ -79,8 +79,8 @@ jobs:
         run: test -z "$(gofmt -l .)"
       - name: Статический анализ — go vet
         run: go vet ./...
-      - name: Тесты
-        run: go test ./...
+      - name: Тесты (детектор гонок)
+        run: go test -race ./...
 
   compose:
     name: Сборка образов и проверка docker compose

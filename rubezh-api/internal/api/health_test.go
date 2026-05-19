@@ -9,13 +9,19 @@ import (
 	"testing"
 )
 
+func testRouter() http.Handler {
+	return NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)))
+}
+
 func TestHealthEndpoint(t *testing.T) {
-	router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	testRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("code = %d, ожидалось 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q, ожидалось application/json", ct)
 	}
 	var body map[string]string
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
@@ -23,5 +29,21 @@ func TestHealthEndpoint(t *testing.T) {
 	}
 	if body["status"] != "ok" || body["service"] != "rubezh-api" {
 		t.Errorf("неожиданное тело: %v", body)
+	}
+}
+
+func TestHealthRejectsNonGet(t *testing.T) {
+	rec := httptest.NewRecorder()
+	testRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/health", nil))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST /health: code = %d, ожидалось 405", rec.Code)
+	}
+}
+
+func TestUnknownRouteReturns404(t *testing.T) {
+	rec := httptest.NewRecorder()
+	testRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/unknown", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("code = %d, ожидалось 404", rec.Code)
 	}
 }
