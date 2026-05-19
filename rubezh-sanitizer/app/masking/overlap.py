@@ -43,7 +43,7 @@ def resolve_overlaps(matches: list[Match]) -> list[Match]:
     for i in range(1, count + 1):
         candidate = ordered[i - 1]
         # последний непересекающийся предшественник — бинарный поиск по
-        # отсортированным концам спанов: O(log n) вместо линейного O(n)
+        # отсортированным концам спанов: O(log n) на шаг (был линейный O(n))
         prev = bisect.bisect_right(ends, candidate.start, hi=i - 1)
         take = _weight(candidate) + best[prev]
         if take > best[i - 1]:

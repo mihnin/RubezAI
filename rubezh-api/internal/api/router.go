@@ -28,6 +28,9 @@ func requestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 			start := time.Now()
 			wrapped := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
 			next.ServeHTTP(wrapped, r)
+			if r.URL.Path == "/health" {
+				return // healthcheck-пробы не засоряют журнал
+			}
 			logger.Info("http_request",
 				"method", r.Method,
 				"path", r.URL.Path,
