@@ -38,6 +38,24 @@ def test_validate_ogrn_invalid() -> None:
     assert validate_ogrn("1027700132190") is False
 
 
+def test_validate_ogrnip_15_valid() -> None:
+    assert validate_ogrn("304500116000157") is True
+
+
+@pytest.mark.parametrize("value", ["0000000000", "000000000000", "1111111111"])
+def test_validate_inn_rejects_degenerate(value: str) -> None:
+    assert validate_inn(value) is False
+
+
+def test_validate_snils_rejects_degenerate() -> None:
+    assert validate_snils("000-000-000 00") is False
+
+
+def test_validate_snils_payload_100() -> None:
+    # взвешенная сумма == 100 → контрольное число 00
+    assert validate_snils("920-000-100 00") is True
+
+
 # --- детекторы: каждый тип находится в тексте ---
 
 
@@ -95,6 +113,32 @@ def test_match_spans_are_correct() -> None:
 
 def test_clean_text_has_no_matches() -> None:
     assert scan("Сегодня хорошая погода и ничего секретного") == []
+
+
+def test_long_number_does_not_yield_phone() -> None:
+    # 20-значный счёт не порождает ложный телефон
+    matches = scan("счёт 40702810500000000123 в банке")
+    assert EntityType.PHONE not in _types(matches)
+    assert EntityType.ACCOUNT in _types(matches)
+
+
+def test_bik_not_classified_as_kpp() -> None:
+    # БИК (префикс 04) не попадает в КПП
+    matches = scan("БИК 044525225")
+    assert EntityType.BIK in _types(matches)
+    assert EntityType.KPP not in _types(matches)
+
+
+def test_bare_10_digit_with_inn_checksum_is_inn() -> None:
+    # Документированное поведение: «голое» 10-значное число с валидной
+    # контрольной суммой ИНН классифицируется как ИНН, а не телефон.
+    assert EntityType.INN in _types(scan("реквизит 9161234567"))
+
+
+def test_person_detector_has_lower_confidence() -> None:
+    # ФИО по regex — эвристика, уверенность ниже валидируемых типов
+    person = next(m for m in scan("Иванов Иван Иванович") if m.type == EntityType.PERSON)
+    assert person.confidence < 1.0
 
 
 def test_pii_detectors_registered() -> None:

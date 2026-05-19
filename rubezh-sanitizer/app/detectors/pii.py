@@ -14,9 +14,16 @@ def _digits(value: str) -> list[int]:
     return [int(ch) for ch in value if ch.isdigit()]
 
 
+def _is_degenerate(digits: list[int]) -> bool:
+    """Все цифры одинаковы (0000000000 и т. п.) — заведомо невалидный реквизит."""
+    return len(set(digits)) <= 1
+
+
 def validate_inn(value: str) -> bool:
     """Проверка контрольной суммы ИНН (10 цифр — ЮЛ, 12 цифр — ФЛ)."""
     digits = _digits(value)
+    if _is_degenerate(digits):
+        return False
 
     def control(weights: list[int]) -> int:
         return sum(w * digits[i] for i, w in enumerate(weights)) % 11 % 10
@@ -33,7 +40,7 @@ def validate_inn(value: str) -> bool:
 def validate_snils(value: str) -> bool:
     """Проверка контрольной суммы СНИЛС (11 цифр)."""
     digits = _digits(value)
-    if len(digits) != 11:
+    if len(digits) != 11 or _is_degenerate(digits):
         return False
     payload = sum(num * (9 - i) for i, num in enumerate(digits[:9])) % 101
     if payload == 100:
@@ -44,6 +51,8 @@ def validate_snils(value: str) -> bool:
 def validate_ogrn(value: str) -> bool:
     """Проверка контрольной суммы ОГРН (13 цифр) или ОГРНИП (15 цифр)."""
     digits = _digits(value)
+    if _is_degenerate(digits):
+        return False
     if len(digits) == 13:
         body = int("".join(str(d) for d in digits[:12]))
         return body % 11 % 10 == digits[12]
@@ -71,12 +80,14 @@ class RegexDetector:
         category: Category,
         pattern: str,
         validator: Callable[[str], bool] | None = None,
+        confidence: float = 1.0,
     ) -> None:
         self.name = name
         self.entity_type = entity_type
         self.category = category
         self._regex = re.compile(pattern)
         self._validator = validator
+        self._confidence = confidence
 
     def detect(self, text: str) -> list[Match]:
         matches: list[Match] = []
@@ -92,7 +103,7 @@ class RegexDetector:
                     end=found.end(),
                     value=value,
                     detector="regex",
-                    confidence=1.0,
+                    confidence=self._confidence,
                 )
             )
         return matches
@@ -114,7 +125,7 @@ def pii_detectors() -> list[RegexDetector]:
     return [
         RegexDetector(
             name="person", entity_type=EntityType.PERSON, category=pii,
-            pattern=_PERSON_PATTERN,
+            pattern=_PERSON_PATTERN, confidence=0.6,
         ),
         RegexDetector(
             name="email", entity_type=EntityType.EMAIL, category=pii,
@@ -122,7 +133,7 @@ def pii_detectors() -> list[RegexDetector]:
         ),
         RegexDetector(
             name="phone", entity_type=EntityType.PHONE, category=pii,
-            pattern=r"(?:\+7|8)[\s\-]?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}",
+            pattern=r"(?<!\d)(?:\+7|8)[\s\-]?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}(?!\d)",
         ),
         RegexDetector(
             name="passport", entity_type=EntityType.PASSPORT, category=pii,
@@ -142,7 +153,7 @@ def pii_detectors() -> list[RegexDetector]:
         ),
         RegexDetector(
             name="kpp", entity_type=EntityType.KPP, category=pii,
-            pattern=r"\b\d{4}[\dA-Z]{2}\d{3}\b",
+            pattern=r"\b(?!04)\d{4}[\dA-Z]{2}\d{3}\b",
         ),
         RegexDetector(
             name="bik", entity_type=EntityType.BIK, category=pii,
