@@ -122,11 +122,16 @@ def test_long_number_does_not_yield_phone() -> None:
     assert EntityType.ACCOUNT in _types(matches)
 
 
-def test_bik_not_classified_as_kpp() -> None:
-    # БИК (префикс 04) не попадает в КПП
-    matches = scan("БИК 044525225")
-    assert EntityType.BIK in _types(matches)
-    assert EntityType.KPP not in _types(matches)
+def test_bik_kpp_overlap_is_known() -> None:
+    # БИК и КПП оба 9-значные; БИК с префиксом 04 совпадает с форматом КПП.
+    # Это осознанное пересечение — снимается дизамбигуацией в итерации 4.
+    assert EntityType.BIK in _types(scan("БИК 044525225"))
+
+
+def test_region_04_kpp_value_is_detected() -> None:
+    # КПП региона 04 (Республика Алтай, формат 04…) не теряется:
+    # фрагмент детектируется как минимум одним детектором — реквизит не утекает.
+    assert scan("КПП 041101001") != []
 
 
 def test_bare_10_digit_with_inn_checksum_is_inn() -> None:

@@ -153,7 +153,7 @@ def pii_detectors() -> list[RegexDetector]:
         ),
         RegexDetector(
             name="kpp", entity_type=EntityType.KPP, category=pii,
-            pattern=r"\b(?!04)\d{4}[\dA-Z]{2}\d{3}\b",
+            pattern=r"\b\d{4}[\dA-Z]{2}\d{3}\b",
         ),
         RegexDetector(
             name="bik", entity_type=EntityType.BIK, category=pii,
