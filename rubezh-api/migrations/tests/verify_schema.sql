@@ -107,15 +107,20 @@ BEGIN
   RAISE NOTICE 'OK: pseudonym_mappings хранит только зашифрованное значение';
 END $$;
 
--- 6. audit_events привязан к неизменяемой версии политики
+-- 6. audit_events привязан к неизменяемой версии политики через внешний ключ
 DO $$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-    WHERE table_schema='public' AND table_name='audit_events'
-      AND column_name='policy_version_id') THEN
-    RAISE EXCEPTION 'audit_events: отсутствует policy_version_id';
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint c
+    JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+    WHERE c.contype = 'f'
+      AND c.conrelid = 'audit_events'::regclass
+      AND c.confrelid = 'policy_versions'::regclass
+      AND a.attname = 'policy_version_id'
+  ) THEN
+    RAISE EXCEPTION 'audit_events.policy_version_id не является FK на policy_versions';
   END IF;
-  RAISE NOTICE 'OK: audit_events привязан к версии политики';
+  RAISE NOTICE 'OK: audit_events привязан к версии политики (FK)';
 END $$;
 
 -- 7. forensics-данные не уничтожаются каскадом (FK с ON DELETE SET NULL)
