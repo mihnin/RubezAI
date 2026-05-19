@@ -65,10 +65,11 @@ uv lock                              # пересобрать uv.lock после
 ### rubezh-api (Go) — собирается и тестируется **только в Docker**
 
 Go SDK локально не установлен. Команды запускать **из PowerShell** (Git Bash
-искажает путь `/src` в аргументах docker). Префикс:
+искажает unix-пути в аргументах docker). Монтируется весь репозиторий —
+контрактные тесты читают `docs/contracts/`. Префикс:
 
 ```
-docker run --rm -v c:/dev/RubezAI/rubezh-api:/src -v rubezh-go-cache:/go/pkg/mod -w /src golang:1.25-bookworm
+docker run --rm -v c:/dev/RubezAI:/repo -v rubezh-go-cache:/go/pkg/mod -w /repo/rubezh-api golang:1.25-bookworm
 ```
 
 ```

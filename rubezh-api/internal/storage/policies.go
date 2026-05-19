@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -18,12 +19,15 @@ type Policy struct {
 	Description    string
 	IsActive       bool
 	CurrentVersion int
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // ListPolicies возвращает все политики, отсортированные по имени.
 func (s *Storage) ListPolicies(ctx context.Context) ([]Policy, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, name, COALESCE(description, ''), is_active, current_version
+		`SELECT id, name, COALESCE(description, ''), is_active, current_version,
+		        created_at, updated_at
 		 FROM policies ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("storage: список политик: %w", err)
@@ -35,6 +39,7 @@ func (s *Storage) ListPolicies(ctx context.Context) ([]Policy, error) {
 		var p Policy
 		if err := rows.Scan(
 			&p.ID, &p.Name, &p.Description, &p.IsActive, &p.CurrentVersion,
+			&p.CreatedAt, &p.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("storage: чтение строки политики: %w", err)
 		}
@@ -59,9 +64,10 @@ func (s *Storage) CreatePolicy(
 	policy := Policy{Name: name, Description: description}
 	err = tx.QueryRow(ctx,
 		`INSERT INTO policies (name, description) VALUES ($1, $2)
-		 RETURNING id, is_active, current_version`,
+		 RETURNING id, is_active, current_version, created_at, updated_at`,
 		name, description,
-	).Scan(&policy.ID, &policy.IsActive, &policy.CurrentVersion)
+	).Scan(&policy.ID, &policy.IsActive, &policy.CurrentVersion,
+		&policy.CreatedAt, &policy.UpdatedAt)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {

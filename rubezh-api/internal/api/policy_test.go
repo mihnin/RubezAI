@@ -134,30 +134,69 @@ func TestPolicyTestResponseMatchesContract(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("ответ не JSON: %v", err)
 	}
-	// набор полей == PolicyDecision из policy.schema.json
-	want := map[string]bool{
-		"decision": true, "matched_policy_id": true,
-		"matched_policy_version": true, "matched_rule": true, "reasons": true,
+
+	// источник истины — сам контракт policy.schema.json
+	raw, err := os.ReadFile("../../../docs/contracts/policy.schema.json")
+	if err != nil {
+		t.Fatalf("чтение контракта: %v", err)
 	}
-	for k := range resp {
-		if !want[k] {
-			t.Errorf("лишнее поле ответа: %q", k)
+	var schema struct {
+		Defs struct {
+			PolicyDecision struct {
+				Properties map[string]struct {
+					Enum []string `json:"enum"`
+				} `json:"properties"`
+			} `json:"PolicyDecision"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatalf("разбор контракта: %v", err)
+	}
+	props := schema.Defs.PolicyDecision.Properties
+	if len(props) == 0 {
+		t.Fatal("в контракте не найдены свойства PolicyDecision")
+	}
+	for key := range resp {
+		if _, ok := props[key]; !ok {
+			t.Errorf("поле ответа %q отсутствует в контракте", key)
 		}
 	}
-	for k := range want {
-		if _, ok := resp[k]; !ok {
-			t.Errorf("в ответе нет поля %q", k)
+	for key := range props {
+		if _, ok := resp[key]; !ok {
+			t.Errorf("обязательное поле контракта %q отсутствует в ответе", key)
 		}
 	}
-	validDecisions := map[string]bool{
-		"allow_raw": true, "allow_masked": true, "allow_summary_only": true,
-		"deny": true, "escalate": true,
+	validDecisions := map[string]bool{}
+	for _, d := range props["decision"].Enum {
+		validDecisions[d] = true
 	}
 	if d, _ := resp["decision"].(string); !validDecisions[d] {
 		t.Errorf("decision %q вне enum контракта", d)
 	}
 	if reasons, _ := resp["reasons"].([]any); len(reasons) == 0 {
 		t.Error("reasons пуст (контракт требует minItems=1)")
+	}
+}
+
+func TestPolicyTestEndpointRejectsUnknownEnum(t *testing.T) {
+	// неизвестные enum-значения отклоняются на входе (соответствие контракту)
+	bad := []string{
+		`{"model_trust":"azure","risk":{"level":"low","classes":[],` +
+			`"score":0},"entity_types":[],"user_role":"user","context":"chat"}`,
+		`{"model_trust":"external","risk":{"level":"ultra","classes":[],` +
+			`"score":0},"entity_types":[],"user_role":"user","context":"chat"}`,
+		`{"model_trust":"external","risk":{"level":"low","classes":["nuclear"],` +
+			`"score":0},"entity_types":[],"user_role":"user","context":"chat"}`,
+	}
+	for _, body := range bad {
+		req := httptest.NewRequest(http.MethodPost, "/api/policies/test",
+			bytes.NewBufferString(body))
+		req.Header.Set("Authorization", userToken())
+		rec := httptest.NewRecorder()
+		apiTestRouter().ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("вход %s: code = %d, ожидалось 400", body, rec.Code)
+		}
 	}
 }
 

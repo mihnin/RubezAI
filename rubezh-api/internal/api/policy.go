@@ -3,7 +3,9 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/rubezh-ai/rubezh-api/internal/policy"
 	"github.com/rubezh-ai/rubezh-api/internal/storage"
@@ -34,16 +36,59 @@ type policyDecisionDTO struct {
 }
 
 type policyDTO struct {
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	Description    string `json:"description"`
-	IsActive       bool   `json:"is_active"`
-	CurrentVersion int    `json:"current_version"`
+	ID             string    `json:"id"`
+	Name           string    `json:"name"`
+	Description    string    `json:"description"`
+	IsActive       bool      `json:"is_active"`
+	CurrentVersion int       `json:"current_version"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 type createPolicyRequest struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
+}
+
+// Допустимые значения enum-полей контракта policy.schema.json.
+var (
+	validModelTrust = map[string]bool{
+		"external": true, "russian_cloud": true,
+		"on_prem": true, "trusted_local": true,
+	}
+	validRiskLevel = map[string]bool{
+		"low": true, "medium": true, "high": true, "critical": true,
+	}
+	validRiskClass = map[string]bool{
+		"pii": true, "secret": true, "commercial": true,
+	}
+	validUserRole = map[string]bool{
+		"user": true, "security_officer": true, "compliance_officer": true,
+		"admin": true, "auditor": true, "developer": true,
+	}
+	validContext = map[string]bool{"chat": true, "document": true}
+)
+
+// validate проверяет вход на соответствие enum-значениям контракта.
+func (d policyInputDTO) validate() error {
+	if !validModelTrust[d.ModelTrust] {
+		return fmt.Errorf("недопустимый model_trust: %q", d.ModelTrust)
+	}
+	if !validRiskLevel[d.Risk.Level] {
+		return fmt.Errorf("недопустимый risk.level: %q", d.Risk.Level)
+	}
+	for _, class := range d.Risk.Classes {
+		if !validRiskClass[class] {
+			return fmt.Errorf("недопустимый risk-класс: %q", class)
+		}
+	}
+	if !validUserRole[d.UserRole] {
+		return fmt.Errorf("недопустимый user_role: %q", d.UserRole)
+	}
+	if !validContext[d.Context] {
+		return fmt.Errorf("недопустимый context: %q", d.Context)
+	}
+	return nil
 }
 
 func (d policyInputDTO) toInput() policy.Input {
@@ -74,6 +119,20 @@ func decisionToDTO(o policy.Outcome) policyDecisionDTO {
 	}
 }
 
+// storagePolicyToDTO — явный маппинг доменной записи в DTO HTTP-слоя
+// (не полагается на совпадение структур).
+func storagePolicyToDTO(p storage.Policy) policyDTO {
+	return policyDTO{
+		ID:             p.ID,
+		Name:           p.Name,
+		Description:    p.Description,
+		IsActive:       p.IsActive,
+		CurrentVersion: p.CurrentVersion,
+		CreatedAt:      p.CreatedAt,
+		UpdatedAt:      p.UpdatedAt,
+	}
+}
+
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -86,6 +145,10 @@ func policyTestHandler(w http.ResponseWriter, r *http.Request) {
 	var input policyInputDTO
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		http.Error(w, "некорректный JSON", http.StatusBadRequest)
+		return
+	}
+	if err := input.validate(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	outcome := policy.DefaultPolicy().Decide(input.toInput())
@@ -102,7 +165,7 @@ func listPoliciesHandler(store *storage.Storage) http.HandlerFunc {
 		}
 		out := make([]policyDTO, len(policies))
 		for i, p := range policies {
-			out[i] = policyDTO(p)
+			out[i] = storagePolicyToDTO(p)
 		}
 		writeJSON(w, http.StatusOK, out)
 	}
@@ -131,6 +194,6 @@ func createPolicyHandler(store *storage.Storage) http.HandlerFunc {
 				http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, http.StatusCreated, policyDTO(created))
+		writeJSON(w, http.StatusCreated, storagePolicyToDTO(created))
 	}
 }
