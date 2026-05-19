@@ -253,17 +253,7 @@ func chatHandler(
 			return
 		}
 
-		chatReq := chat.Request{
-			RequestID:  newRequestID(),
-			SessionID:  session.ID,
-			UserID:     userID,
-			UserRole:   string(role),
-			Message:    dto.Message,
-			Provider:   provider.Name,
-			ProviderID: provider.ID,
-			ModelTrust: provider.TrustLevel,
-			Model:      modelOrDefault(dto.Model, provider.Name),
-		}
+		chatReq := buildChatRequest(role, userID, dto, provider, session)
 
 		// Подготовка — может вернуть ошибку ДО открытия SSE. Тогда отдаём
 		// HTTP-код (без SSE-заголовков); chat_error уже записан внутри.
@@ -370,6 +360,25 @@ func modelOrDefault(model, provider string) string {
 		return model
 	}
 	return provider
+}
+
+// buildChatRequest собирает chat.Request из контекста аутентификации,
+// валидированного тела и резолва провайдера/сессии.
+func buildChatRequest(
+	role auth.Role, userID string, dto chatRequestDTO,
+	provider storage.ModelProvider, session storage.ChatSession,
+) chat.Request {
+	return chat.Request{
+		RequestID:  newRequestID(),
+		SessionID:  session.ID,
+		UserID:     userID,
+		UserRole:   string(role),
+		Message:    dto.Message,
+		Provider:   provider.Name,
+		ProviderID: provider.ID,
+		ModelTrust: provider.TrustLevel,
+		Model:      modelOrDefault(dto.Model, provider.Name),
+	}
 }
 
 // newRequestID генерирует UUID-v4 — коррелятор аудит-событий запроса.

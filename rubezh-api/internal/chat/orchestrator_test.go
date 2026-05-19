@@ -301,6 +301,17 @@ func TestOrchestratorBadSpan(t *testing.T) {
 	if got := store.auditTypes(); len(got) != 1 || got[0] != "chat_error" {
 		t.Errorf("аудит = %v, ожидалось [chat_error]", got)
 	}
+	// sanitizedErrorEvent (MINOR-3): риск из preview сохраняется в аудите
+	errAudit := store.auditOfType("chat_error")
+	if errAudit == nil || errAudit.RiskLevel == nil ||
+		*errAudit.RiskLevel != "medium" {
+		t.Errorf("chat_error после sanitize должен нести risk_level=medium: %+v",
+			errAudit)
+	}
+	if len(errAudit.RiskClasses) != 1 || errAudit.RiskClasses[0] != "pii" {
+		t.Errorf("chat_error должен нести risk_classes из preview: %v",
+			errAudit.RiskClasses)
+	}
 }
 
 func TestOrchestratorLLMError(t *testing.T) {
@@ -373,6 +384,12 @@ func TestOrchestratorTerminationError(t *testing.T) {
 	if errAudit.Detail["audit_persist_failed"] != true {
 		t.Errorf("chat_error при сбое Tx2 должен нести audit_persist_failed=true: %v",
 			errAudit.Detail)
+	}
+	// policyErrorEvent заполняет masked_payload санированным текстом
+	if errAudit.MaskedPayload == nil ||
+		*errAudit.MaskedPayload != "Звонил ФИО_001" {
+		t.Errorf("chat_error должен нести masked_payload (sanitized): %v",
+			errAudit.MaskedPayload)
 	}
 }
 
