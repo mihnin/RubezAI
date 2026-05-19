@@ -173,21 +173,20 @@
 
 ---
 
-## Технический долг (бэклог)
+## Технический долг
 
-Накапливается из ревью; разбирается на итерации интеграции или по мере касания.
+Все 8 MINOR из ревью Итераций 4–5 **устранены** (коммиты `9161fbd`, `1044630`):
 
-- NER как фильтр 2/3 должен **дополнять** regex, а не замещать его — явная
-  многослойная композиция в `pipeline`/`registry` (ревью Итерации 4, MINOR-1) → Итерация 8.
-- `resolve_overlaps` — заменить линейный поиск предшественника на `bisect`,
-  O(n log n) (ревью Итерации 4, MINOR-2).
-- Контрактный тест: сверка enum `Entity.detector` со схемой (ревью Итерации 4, MINOR-3).
-- Инициализация `cipher` — перенести в FastAPI lifespan вместо import-time
-  (ревью Итерации 4, MINOR-4).
-- healthcheck-режим `main` и HTTP-сервер — единый источник порта (ревью Итерации 5, MINOR-1).
-- `main_test.go` — тест `healthcheck()` через `httptest.Server` (ревью Итерации 5, MINOR-2).
-- `requestLogger` — добавить статус-код ответа и RequestID (ревью Итерации 5, MINOR-3).
-- Прокинуть `cfg.LogLevel` в `slog.HandlerOptions` (ревью Итерации 5, MINOR-4).
+- ~~NER-фильтр замещал regex~~ → `pipeline.sanitize(ner=...)` дополняет фильтр 1.
+- ~~`resolve_overlaps` O(n²)~~ → `bisect`, O(n log n).
+- ~~enum `Entity.detector` без контрактного теста~~ → контрактный тест добавлен.
+- ~~`cipher` инициализировался на import-time~~ → FastAPI lifespan (`app.state`).
+- ~~healthcheck и сервер читали порт раздельно~~ → единый `config.HTTPPort()`.
+- ~~`healthcheck()` без теста~~ → `main_test.go` (`healthcheckAt`, `logLevel`).
+- ~~`requestLogger` без статус-кода~~ → `status` + `request_id` (chi RequestID).
+- ~~`cfg.LogLevel` не применялся~~ → прокинут в `slog.HandlerOptions`.
+
+Новые пункты добавляются сюда по мере появления из ревью.
 
 ## История ревью архитектора
 
