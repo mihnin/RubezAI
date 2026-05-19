@@ -146,6 +146,64 @@ def test_person_detector_has_lower_confidence() -> None:
     assert person.confidence < 1.0
 
 
+@pytest.mark.parametrize(
+    "raw",
+    ["+7 (495) 123-45-67", "8-916-123-45-67", "+79161234567", "8 916 123 45 67"],
+)
+def test_phone_format_matrix(raw: str) -> None:
+    assert EntityType.PHONE in _types(scan(f"телефон {raw}"))
+
+
+def test_phone_not_detected_inside_long_digit_run() -> None:
+    # «8…» в середине длинной цифровой строки не должно давать телефон
+    assert EntityType.PHONE not in _types(scan("идентификатор 880123456789012 принят"))
+
+
+def test_inn_11_digits_not_detected() -> None:
+    # 11 цифр — ни ИНН ЮЛ (10), ни ИНН ФЛ (12)
+    assert EntityType.INN not in _types(scan("номер 12345678901 в системе"))
+
+
+def test_snils_accepts_space_and_dash_separator() -> None:
+    assert EntityType.SNILS in _types(scan("СНИЛС 112-233-445 95"))
+    assert EntityType.SNILS in _types(scan("СНИЛС 112-233-445-95"))
+
+
+def test_scan_results_sorted_by_position() -> None:
+    matches = scan("счёт 40702810500000000123, почта a@b.ru, ИНН 7707083893")
+    assert matches == sorted(matches, key=lambda m: (m.start, m.end))
+
+
+def test_duplicate_value_yields_separate_matches() -> None:
+    emails = [m for m in scan("ivan@x.ru и снова ivan@x.ru") if m.type == EntityType.EMAIL]
+    assert len(emails) == 2
+    assert emails[0].start != emails[1].start
+
+
+def test_passport_detector_is_broad_known_limitation() -> None:
+    # Документированное ограничение regex-слоя: паспорт = \d{4}\s\d{6};
+    # произвольная пара чисел тоже совпадает. Уточнение — NER (итерация 4).
+    assert EntityType.PASSPORT in _types(scan("период 2024 123456 закрыт"))
+
+
+def test_account_detector_is_broad_known_limitation() -> None:
+    # Документированное ограничение: счёт = любые 20 цифр (контрольная сумма
+    # счёта зависит от БИК; точная валидация — после MVP).
+    assert EntityType.ACCOUNT in _types(scan("идентификатор 12345678901234567890"))
+
+
+def test_inn_checksum_collision_known_limitation() -> None:
+    # «Голое» число с валидной контрольной суммой ИНН помечается как ИНН,
+    # даже если по смыслу им не является. Контекст уточняет NER (итерация 4).
+    assert EntityType.INN in _types(scan("код 7707083893 в реестре"))
+
+
+def test_person_false_positive_known_limitation() -> None:
+    # Три слова с заглавной — эвристика ФИО; возможны ложные срабатывания,
+    # снимаемые NER (итерация 4). confidence такого детектора понижен.
+    assert EntityType.PERSON in _types(scan("Купить Молоко Хлеб"))
+
+
 def test_pii_detectors_registered() -> None:
     from app.detectors.pii import pii_detectors
 
