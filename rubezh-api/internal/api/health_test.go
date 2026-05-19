@@ -10,7 +10,7 @@ import (
 )
 
 func testRouter() http.Handler {
-	return NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return NewRouter(Deps{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 }
 
 func TestHealthEndpoint(t *testing.T) {

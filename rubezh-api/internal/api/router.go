@@ -8,15 +8,33 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+
+	"github.com/rubezh-ai/rubezh-api/internal/auth"
+	"github.com/rubezh-ai/rubezh-api/internal/storage"
 )
 
-// NewRouter собирает HTTP-роутер сервиса.
-func NewRouter(logger *slog.Logger) http.Handler {
+// Deps — зависимости HTTP-слоя.
+type Deps struct {
+	Logger     *slog.Logger
+	Store      *storage.Storage
+	AuthSecret string
+}
+
+// NewRouter собирает HTTP-роутер сервиса. Маршруты /api защищены
+// auth-middleware; /health — публичная проба.
+func NewRouter(deps Deps) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
-	r.Use(requestLogger(logger))
+	r.Use(requestLogger(deps.Logger))
+
 	r.Get("/health", healthHandler)
+	r.Route("/api", func(api chi.Router) {
+		api.Use(auth.Middleware(deps.AuthSecret))
+		api.Post("/policies/test", policyTestHandler)
+		api.Get("/policies", listPoliciesHandler(deps.Store))
+		api.Post("/policies", createPolicyHandler(deps.Store))
+	})
 	return r
 }
 

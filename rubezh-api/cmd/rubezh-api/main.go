@@ -41,8 +41,12 @@ func main() {
 	}
 
 	srv := &http.Server{
-		Addr:              ":" + cfg.HTTPPort,
-		Handler:           api.NewRouter(logger),
+		Addr: ":" + cfg.HTTPPort,
+		Handler: api.NewRouter(api.Deps{
+			Logger:     logger,
+			Store:      store,
+			AuthSecret: cfg.AuthSecret,
+		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	logger.Info("rubezh-api запущен", "port", cfg.HTTPPort)
