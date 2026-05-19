@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/rubezh-ai/rubezh-api/internal/policy"
@@ -121,7 +122,13 @@ func createPolicyHandler(store *storage.Storage) http.HandlerFunc {
 		}
 		created, err := store.CreatePolicy(r.Context(), req.Name, req.Description)
 		if err != nil {
-			http.Error(w, "не удалось создать политику", http.StatusConflict)
+			if errors.Is(err, storage.ErrPolicyExists) {
+				http.Error(w, "политика с таким именем уже существует",
+					http.StatusConflict)
+				return
+			}
+			http.Error(w, "не удалось создать политику",
+				http.StatusInternalServerError)
 			return
 		}
 		writeJSON(w, http.StatusCreated, policyDTO(created))

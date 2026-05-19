@@ -62,6 +62,14 @@ func DefaultPolicy() Policy {
 				Match:    func(in Input) bool { return in.Risk.Level == RiskCritical },
 			},
 			{
+				Name:     "external-high-summary",
+				Decision: DecisionAllowSummaryOnly,
+				Reason:   "высокий риск при внешней модели — допустима только выжимка",
+				Match: func(in Input) bool {
+					return isExternalTrust(in.ModelTrust) && in.Risk.Level == RiskHigh
+				},
+			},
+			{
 				Name:     "external-sensitive-masked",
 				Decision: DecisionAllowMasked,
 				Reason:   "внешняя модель получает только обезличенный текст",

@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strconv"
 	"testing"
@@ -71,7 +72,29 @@ func TestCreatePolicyRejectsDuplicateName(t *testing.T) {
 	if _, err := store.CreatePolicy(ctx, name, ""); err != nil {
 		t.Fatalf("первое создание: %v", err)
 	}
-	if _, err := store.CreatePolicy(ctx, name, ""); err == nil {
-		t.Error("повторное имя политики должно отклоняться (UNIQUE)")
+	if _, err := store.CreatePolicy(ctx, name, ""); !errors.Is(err, ErrPolicyExists) {
+		t.Errorf("повторное имя: ожидалась ErrPolicyExists, получено %v", err)
+	}
+}
+
+func TestCreatePolicyIsAtomic(t *testing.T) {
+	// политика и её первая версия создаются атомарно — ровно одна версия
+	store := testStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	name := "atomic-policy-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	created, err := store.CreatePolicy(ctx, name, "")
+	if err != nil {
+		t.Fatalf("CreatePolicy: %v", err)
+	}
+	var versions int
+	if err := store.Pool().QueryRow(ctx,
+		"SELECT count(*) FROM policy_versions WHERE policy_id = $1", created.ID,
+	).Scan(&versions); err != nil {
+		t.Fatalf("запрос версий: %v", err)
+	}
+	if versions != 1 {
+		t.Errorf("версий политики = %d, ожидалась ровно 1", versions)
 	}
 }

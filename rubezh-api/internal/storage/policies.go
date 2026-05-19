@@ -2,8 +2,14 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
+
+// ErrPolicyExists — политика с таким именем уже существует (нарушение UNIQUE).
+var ErrPolicyExists = errors.New("storage: политика с таким именем уже существует")
 
 // Policy — запись политики из таблицы policies.
 type Policy struct {
@@ -57,6 +63,10 @@ func (s *Storage) CreatePolicy(
 		name, description,
 	).Scan(&policy.ID, &policy.IsActive, &policy.CurrentVersion)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return Policy{}, ErrPolicyExists
+		}
 		return Policy{}, fmt.Errorf("storage: создание политики: %w", err)
 	}
 	if _, err := tx.Exec(ctx,

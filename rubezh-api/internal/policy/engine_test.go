@@ -98,3 +98,79 @@ func TestExternalNeverGetsRawSensitiveData(t *testing.T) {
 		}
 	}
 }
+
+func TestExternalHighRiskGetsSummaryOnly(t *testing.T) {
+	out := DefaultPolicy().Decide(Input{
+		ModelTrust: TrustExternal,
+		Risk:       Risk{Level: RiskHigh, Classes: []RiskClass{ClassPII}},
+	})
+	if out.Decision != DecisionAllowSummaryOnly {
+		t.Errorf("Decide = %q, ожидалось allow_summary_only", out.Decision)
+	}
+}
+
+func TestEmptyPolicyFailsClosed(t *testing.T) {
+	// политика без правил → безопасный deny, без указания правила
+	out := Policy{Name: "empty"}.Decide(Input{ModelTrust: TrustTrustedLocal})
+	if out.Decision != DecisionDeny {
+		t.Errorf("Decide = %q, ожидалось deny (fail-closed)", out.Decision)
+	}
+	if out.MatchedRule != nil {
+		t.Error("для несработавшего пути правило указываться не должно")
+	}
+	if len(out.Reasons) == 0 {
+		t.Error("fail-closed deny обязан содержать причину")
+	}
+}
+
+func TestUnknownModelTrustFailsClosed(t *testing.T) {
+	for _, trust := range []ModelTrust{"", "unknown_cloud"} {
+		out := DefaultPolicy().Decide(Input{
+			ModelTrust: trust, Risk: Risk{Level: RiskLow},
+		})
+		if out.Decision != DecisionDeny {
+			t.Errorf("trust=%q: Decide = %q, ожидалось deny", trust, out.Decision)
+		}
+	}
+}
+
+func TestEmptyRiskOnExternalIsRaw(t *testing.T) {
+	out := DefaultPolicy().Decide(Input{ModelTrust: TrustExternal, Risk: Risk{}})
+	if out.Decision != DecisionAllowRaw {
+		t.Errorf("Decide = %q, ожидалось allow_raw", out.Decision)
+	}
+}
+
+func TestCriticalEscalatePrecedesMasked(t *testing.T) {
+	out := DefaultPolicy().Decide(Input{
+		ModelTrust: TrustExternal,
+		Risk:       Risk{Level: RiskCritical, Classes: []RiskClass{ClassPII}},
+	})
+	if out.Decision != DecisionEscalate {
+		t.Errorf("Decide = %q, ожидалось escalate", out.Decision)
+	}
+}
+
+func TestAllContractDecisionsReachable(t *testing.T) {
+	// все 5 решений из policy.schema.json достижимы DefaultPolicy
+	reached := map[Decision]bool{}
+	for _, in := range []Input{
+		{ModelTrust: TrustTrustedLocal, Risk: Risk{Classes: []RiskClass{ClassSecret}}},
+		{ModelTrust: TrustOnPrem, Risk: Risk{Level: RiskCritical}},
+		{ModelTrust: TrustExternal, Risk: Risk{
+			Level: RiskHigh, Classes: []RiskClass{ClassPII}}},
+		{ModelTrust: TrustExternal, Risk: Risk{
+			Level: RiskMedium, Classes: []RiskClass{ClassPII}}},
+		{ModelTrust: TrustTrustedLocal, Risk: Risk{Level: RiskLow}},
+	} {
+		reached[DefaultPolicy().Decide(in).Decision] = true
+	}
+	for _, d := range []Decision{
+		DecisionDeny, DecisionEscalate, DecisionAllowSummaryOnly,
+		DecisionAllowMasked, DecisionAllowRaw,
+	} {
+		if !reached[d] {
+			t.Errorf("решение %q недостижимо DefaultPolicy", d)
+		}
+	}
+}
