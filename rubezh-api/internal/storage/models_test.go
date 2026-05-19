@@ -64,3 +64,23 @@ func TestCreateModelProviderRejectsDuplicateName(t *testing.T) {
 		t.Errorf("дубликат имени: ожидалась ErrModelProviderExists, получено %v", err)
 	}
 }
+
+func TestCreateModelProviderNullableFields(t *testing.T) {
+	store := testStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	name := "nullable-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	created, err := store.CreateModelProvider(ctx, ModelProvider{
+		Name: name, TrustLevel: "external", Adapter: "mock",
+	})
+	if err != nil {
+		t.Fatalf("CreateModelProvider: %v", err)
+	}
+	if created.Endpoint != "" {
+		t.Errorf("Endpoint = %q, ожидалось пусто (NULL)", created.Endpoint)
+	}
+	if created.MaxTokens != nil || created.RateLimitPerMin != nil {
+		t.Error("max_tokens / rate_limit_per_min должны быть nil (NULL)")
+	}
+}

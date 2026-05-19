@@ -6,8 +6,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/rubezh-ai/rubezh-api/internal/auth"
 )
 
 func TestListModelsRequiresAuth(t *testing.T) {
@@ -118,5 +121,190 @@ func TestCreateModelRejectsBadJSON(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("code = %d, ожидалось 400", rec.Code)
+	}
+}
+
+func TestCreateModelResponseFields(t *testing.T) {
+	router, closeStore := dbRouter(t)
+	defer closeStore()
+	name := "fields-model-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	body := `{"name":"` + name + `","trust_level":"russian_cloud","adapter":"mock"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/models",
+		bytes.NewBufferString(body))
+	req.Header.Set("Authorization", userToken())
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("code = %d", rec.Code)
+	}
+	var created modelProviderDTO
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+	if created.TrustLevel != "russian_cloud" || created.Adapter != "mock" {
+		t.Errorf("поля trust/adapter некорректны: %+v", created)
+	}
+	if created.Endpoint != "" {
+		t.Errorf("Endpoint = %q, ожидалось пусто", created.Endpoint)
+	}
+	if !strings.Contains(rec.Body.String(), `"max_tokens":null`) {
+		t.Errorf("max_tokens должен сериализоваться как null: %s", rec.Body)
+	}
+}
+
+func TestCreateModelPersistsNullableFields(t *testing.T) {
+	router, closeStore := dbRouter(t)
+	defer closeStore()
+	name := "nullable-model-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	body := `{"name":"` + name + `","trust_level":"external",` +
+		`"adapter":"openai_compatible","endpoint":"http://llm.local",` +
+		`"max_tokens":2048,"rate_limit_per_min":60}`
+	req := httptest.NewRequest(http.MethodPost, "/api/models",
+		bytes.NewBufferString(body))
+	req.Header.Set("Authorization", userToken())
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("code = %d (тело %s)", rec.Code, rec.Body)
+	}
+	var created modelProviderDTO
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+	if created.MaxTokens == nil || *created.MaxTokens != 2048 {
+		t.Error("max_tokens не сохранён")
+	}
+	if created.RateLimitPerMin == nil || *created.RateLimitPerMin != 60 {
+		t.Error("rate_limit_per_min не сохранён")
+	}
+	if created.Endpoint != "http://llm.local" {
+		t.Errorf("Endpoint = %q", created.Endpoint)
+	}
+}
+
+func TestCreateModelRejectsInvalidAdapter(t *testing.T) {
+	router, closeStore := dbRouter(t)
+	defer closeStore()
+	body := `{"name":"x","trust_level":"external","adapter":"langchain"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/models",
+		bytes.NewBufferString(body))
+	req.Header.Set("Authorization", userToken())
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("code = %d, ожидалось 400", rec.Code)
+	}
+}
+
+func TestCreateModelRejectsMissingName(t *testing.T) {
+	router, closeStore := dbRouter(t)
+	defer closeStore()
+	for _, body := range []string{
+		`{"trust_level":"external","adapter":"mock"}`,
+		`{"name":"","trust_level":"external","adapter":"mock"}`,
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/api/models",
+			bytes.NewBufferString(body))
+		req.Header.Set("Authorization", userToken())
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("body %s: code = %d, ожидалось 400", body, rec.Code)
+		}
+	}
+}
+
+func TestCreateModelRejectsNonPositiveLimits(t *testing.T) {
+	router, closeStore := dbRouter(t)
+	defer closeStore()
+	for _, body := range []string{
+		`{"name":"x","trust_level":"external","adapter":"mock","max_tokens":0}`,
+		`{"name":"x","trust_level":"external","adapter":"mock","max_tokens":-5}`,
+		`{"name":"x","trust_level":"external","adapter":"mock","rate_limit_per_min":0}`,
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/api/models",
+			bytes.NewBufferString(body))
+		req.Header.Set("Authorization", userToken())
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("body %s: code = %d, ожидалось 400", body, rec.Code)
+		}
+	}
+}
+
+func TestCreateModelAcceptsAllTrustLevels(t *testing.T) {
+	router, closeStore := dbRouter(t)
+	defer closeStore()
+	for _, trust := range []string{
+		"external", "russian_cloud", "on_prem", "trusted_local",
+	} {
+		name := "trust-" + trust + "-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+		body := `{"name":"` + name + `","trust_level":"` + trust + `","adapter":"mock"}`
+		req := httptest.NewRequest(http.MethodPost, "/api/models",
+			bytes.NewBufferString(body))
+		req.Header.Set("Authorization", userToken())
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Errorf("trust %q: code = %d, ожидалось 201", trust, rec.Code)
+		}
+	}
+}
+
+func TestModelsEndpointRejectsWrongMethod(t *testing.T) {
+	router, closeStore := dbRouter(t)
+	defer closeStore()
+	req := httptest.NewRequest(http.MethodDelete, "/api/models", nil)
+	req.Header.Set("Authorization", userToken())
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("DELETE /api/models: code = %d, ожидалось 405", rec.Code)
+	}
+}
+
+func TestCreateModelRejectsEmptyBody(t *testing.T) {
+	router, closeStore := dbRouter(t)
+	defer closeStore()
+	req := httptest.NewRequest(http.MethodPost, "/api/models", nil)
+	req.Header.Set("Authorization", userToken())
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("пустое тело: code = %d, ожидалось 400", rec.Code)
+	}
+}
+
+func TestCreateModelRejectsForeignToken(t *testing.T) {
+	router, closeStore := dbRouter(t)
+	defer closeStore()
+	req := httptest.NewRequest(http.MethodPost, "/api/models",
+		bytes.NewBufferString(`{"name":"x","trust_level":"external","adapter":"mock"}`))
+	req.Header.Set("Authorization",
+		"Bearer "+auth.IssueToken(auth.RoleUser, "wrong-secret"))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("чужой секрет: code = %d, ожидалось 401", rec.Code)
+	}
+}
+
+func TestModelsResponseDoesNotLeakApiKey(t *testing.T) {
+	router, closeStore := dbRouter(t)
+	defer closeStore()
+	name := "leakcheck-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	body := `{"name":"` + name + `","trust_level":"external",` +
+		`"adapter":"openai_compatible","endpoint":"http://llm.local"}`
+	post := httptest.NewRequest(http.MethodPost, "/api/models",
+		bytes.NewBufferString(body))
+	post.Header.Set("Authorization", userToken())
+	router.ServeHTTP(httptest.NewRecorder(), post)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/models", nil)
+	req.Header.Set("Authorization", userToken())
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	raw := rec.Body.String()
+	for _, leak := range []string{"Bearer", "api_key", "apiKey"} {
+		if strings.Contains(raw, leak) {
+			t.Errorf("ответ /api/models содержит подозрительную подстроку %q", leak)
+		}
 	}
 }

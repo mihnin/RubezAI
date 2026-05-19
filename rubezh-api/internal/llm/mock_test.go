@@ -54,3 +54,30 @@ func TestMockProviderRespectsCancelledContext(t *testing.T) {
 		t.Error("отменённый контекст должен приводить к ошибке")
 	}
 }
+
+func TestMockProviderNoUserMessage(t *testing.T) {
+	resp, err := NewMockProvider("mock").Complete(context.Background(), ChatRequest{
+		Model:    "m",
+		Messages: []ChatMessage{{Role: "system", Content: "только система"}},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if resp.Content != "[mock] обработан запрос: " {
+		t.Errorf("Content = %q (ожидался пустой запрос)", resp.Content)
+	}
+}
+
+func TestMockProviderUsesLastUserMessage(t *testing.T) {
+	resp, _ := NewMockProvider("mock").Complete(context.Background(), ChatRequest{
+		Messages: []ChatMessage{
+			{Role: "user", Content: "первый"},
+			{Role: "assistant", Content: "ответ"},
+			{Role: "user", Content: "второй"},
+		},
+	})
+	if !strings.Contains(resp.Content, "второй") ||
+		strings.Contains(resp.Content, "первый") {
+		t.Errorf("mock должен брать последнее user-сообщение: %q", resp.Content)
+	}
+}

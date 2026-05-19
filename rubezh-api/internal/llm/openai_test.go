@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 const validOpenAIResponse = `{"choices":[{"message":` +
@@ -101,5 +102,78 @@ func TestOpenAIProviderCancelledContext(t *testing.T) {
 		ctx, ChatRequest{Messages: []ChatMessage{{Role: "user", Content: "x"}}})
 	if err == nil {
 		t.Error("отменённый контекст должен приводить к ошибке")
+	}
+}
+
+func TestOpenAIProviderInvalidJSON(t *testing.T) {
+	server := fakeOpenAI(t, http.StatusOK, "не json вовсе {{{")
+	defer server.Close()
+	_, err := NewOpenAIProvider("p", server.URL, "test-key").Complete(
+		context.Background(),
+		ChatRequest{Messages: []ChatMessage{{Role: "user", Content: "x"}}})
+	if err == nil {
+		t.Error("некорректный JSON ответа должен давать ошибку")
+	}
+}
+
+func TestOpenAIProviderUnreachableEndpoint(t *testing.T) {
+	_, err := NewOpenAIProvider("p", "http://127.0.0.1:1", "k").Complete(
+		context.Background(),
+		ChatRequest{Messages: []ChatMessage{{Role: "user", Content: "x"}}})
+	if err == nil {
+		t.Error("недоступный endpoint должен давать ошибку")
+	}
+}
+
+func TestOpenAIProviderMalformedURL(t *testing.T) {
+	_, err := NewOpenAIProvider("p", "http://ho\x7fst", "k").Complete(
+		context.Background(),
+		ChatRequest{Messages: []ChatMessage{{Role: "user", Content: "x"}}})
+	if err == nil {
+		t.Error("некорректный URL должен давать ошибку")
+	}
+}
+
+func TestOpenAIProviderRequestMethodAndHeaders(t *testing.T) {
+	var method, path, contentType, auth string
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			method, path = r.Method, r.URL.Path
+			contentType = r.Header.Get("Content-Type")
+			auth = r.Header.Get("Authorization")
+			_, _ = io.WriteString(w, validOpenAIResponse)
+		}))
+	defer server.Close()
+	_, _ = NewOpenAIProvider("p", server.URL, "my-key").Complete(
+		context.Background(),
+		ChatRequest{Messages: []ChatMessage{{Role: "user", Content: "x"}}})
+	if method != http.MethodPost || path != "/chat/completions" {
+		t.Errorf("метод/путь = %s %s", method, path)
+	}
+	if contentType != "application/json" {
+		t.Errorf("Content-Type = %q", contentType)
+	}
+	if auth != "Bearer my-key" {
+		t.Errorf("Authorization = %q", auth)
+	}
+}
+
+func TestOpenAIProviderRespectsContextDeadline(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			time.Sleep(300 * time.Millisecond)
+			_, _ = io.WriteString(w, validOpenAIResponse)
+		}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := NewOpenAIProvider("p", server.URL, "k").Complete(
+		ctx, ChatRequest{Messages: []ChatMessage{{Role: "user", Content: "x"}}})
+	if err == nil {
+		t.Error("истёкший дедлайн контекста должен давать ошибку")
+	}
+	if time.Since(start) > time.Second {
+		t.Error("запрос не прервался по дедлайну вовремя")
 	}
 }
