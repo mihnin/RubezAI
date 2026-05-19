@@ -2,7 +2,7 @@
 #
 # Итерация 0 — инфраструктурные сервисы (PostgreSQL + pgvector, MinIO).
 # Прикладные сервисы добавляются в своих итерациях:
-#   migrate          — итерация 1
+#   migrate          — итерация 1 (добавлен)
 #   rubezh-sanitizer — итерация 2
 #   rubezh-api       — итерация 5
 #   rubezh-worker    — итерация 10
@@ -55,6 +55,24 @@ services:
     networks:
       - rubezh
     restart: unless-stopped
+
+  # Применение миграций БД (one-shot, golang-migrate). Profile 'migrate' —
+  # сервис не стартует при обычном `up`. Запуск: docker compose run --rm migrate
+  migrate:
+    image: migrate/migrate:v4.18.1
+    profiles: ["migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./rubezh-api/migrations:/migrations:ro
+    command:
+      - "-path=/migrations"
+      - "-database=postgres://${POSTGRES_USER:-rubezh}:${POSTGRES_PASSWORD:-rubezh}@postgres:5432/${POSTGRES_DB:-rubezh}?sslmode=disable"
+      - "up"
+    networks:
+      - rubezh
+    restart: "no"
 
 networks:
   rubezh:
