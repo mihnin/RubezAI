@@ -11,6 +11,7 @@ import (
 
 	"github.com/rubezh-ai/rubezh-api/internal/api"
 	"github.com/rubezh-ai/rubezh-api/internal/config"
+	"github.com/rubezh-ai/rubezh-api/internal/llm"
 	"github.com/rubezh-ai/rubezh-api/internal/storage"
 )
 
@@ -40,12 +41,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	providers, err := store.ListModelProviders(ctx)
+	if err != nil {
+		logger.Error("ошибка чтения провайдеров моделей", "error", err)
+		os.Exit(1)
+	}
+	llmRouter := buildRouter(providers, cfg.LLMAPIKey)
+	logger.Info("LLM Router инициализирован", "providers", llmRouter.Count())
+
 	srv := &http.Server{
 		Addr: ":" + cfg.HTTPPort,
 		Handler: api.NewRouter(api.Deps{
 			Logger:     logger,
 			Store:      store,
 			AuthSecret: cfg.AuthSecret,
+			Router:     llmRouter,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -54,6 +64,25 @@ func main() {
 		logger.Error("ошибка HTTP-сервера", "error", err)
 		os.Exit(1)
 	}
+}
+
+// buildRouter регистрирует провайдеров LLM по конфигурации из БД.
+// Отключённые (is_enabled = false) провайдеры пропускаются.
+func buildRouter(providers []storage.ModelProvider, apiKey string) *llm.Router {
+	router := llm.NewRouter()
+	for _, provider := range providers {
+		if !provider.IsEnabled {
+			continue
+		}
+		switch provider.Adapter {
+		case "openai_compatible":
+			router.Register(llm.NewOpenAIProvider(
+				provider.Name, provider.Endpoint, apiKey))
+		default:
+			router.Register(llm.NewMockProvider(provider.Name))
+		}
+	}
+	return router
 }
 
 // logLevel переводит строковый уровень из конфигурации в slog.Level.

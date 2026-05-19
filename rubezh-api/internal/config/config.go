@@ -13,6 +13,7 @@ type Config struct {
 	DatabaseURL  string
 	AuthSecret   string
 	SanitizerURL string
+	LLMAPIKey    string
 }
 
 // Load читает конфигурацию из переменных окружения, подставляя значения по
@@ -24,6 +25,7 @@ func Load() (Config, error) {
 		DatabaseURL:  databaseURL(),
 		AuthSecret:   os.Getenv("AUTH_DEV_TOKEN_SECRET"),
 		SanitizerURL: getEnv("SANITIZER_URL", "http://rubezh-sanitizer:8001"),
+		LLMAPIKey:    os.Getenv("LLM_API_KEY"),
 	}
 	if cfg.AuthSecret == "" {
 		return Config{}, fmt.Errorf("config: переменная AUTH_DEV_TOKEN_SECRET обязательна")

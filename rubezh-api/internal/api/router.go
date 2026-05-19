@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/rubezh-ai/rubezh-api/internal/auth"
+	"github.com/rubezh-ai/rubezh-api/internal/llm"
 	"github.com/rubezh-ai/rubezh-api/internal/storage"
 )
 
@@ -18,6 +19,7 @@ type Deps struct {
 	Logger     *slog.Logger
 	Store      *storage.Storage
 	AuthSecret string
+	Router     *llm.Router // LLM Router; используется /api/chat (итерация 8)
 }
 
 // NewRouter собирает HTTP-роутер сервиса. Маршруты /api защищены
@@ -34,6 +36,8 @@ func NewRouter(deps Deps) http.Handler {
 		api.Post("/policies/test", policyTestHandler)
 		api.Get("/policies", listPoliciesHandler(deps.Store))
 		api.Post("/policies", createPolicyHandler(deps.Store))
+		api.Get("/models", listModelsHandler(deps.Store))
+		api.Post("/models", createModelHandler(deps.Store))
 	})
 	return r
 }
