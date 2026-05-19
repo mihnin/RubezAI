@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rubezh-ai/contracts/chat.schema.json",
+  "title": "Контракт chat: /api/chat и /api/chat/sessions",
+  "description": "Описывает тело запроса /api/chat, управление сессиями и payload SSE-событий. Поток /api/chat — Server-Sent Events: каждое событие имеет имя (meta|delta|done|error) и data-payload; JSON Schema ниже описывает именно payload каждого события. Имена событий фиксируются текстом контракта.",
+  "$defs": {
+    "ChatRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["message", "provider"],
+      "properties": {
+        "session_id": {
+          "type": ["string", "null"],
+          "format": "uuid",
+          "description": "Существующая сессия; null/отсутствие — создать новую"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384,
+          "description": "Текст запроса пользователя. Верхняя граница обязательна: ограничивает объём, уходящий в sanitizer и LLM"
+        },
+        "provider": { "type": "string", "minLength": 1 },
+        "model": { "type": "string" }
+      }
+    },
+    "ChatSessionRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "title": { "type": ["string", "null"] }
+      }
+    },
+    "ChatSession": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "user_id", "title", "created_at", "updated_at"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "user_id": { "type": "string", "format": "uuid" },
+        "title": { "type": ["string", "null"] },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "SseRisk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["level", "score", "classes"],
+      "properties": {
+        "level": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+        "score": { "type": "number", "minimum": 0, "maximum": 1 },
+        "classes": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["pii", "secret", "commercial"] }
+        }
+      }
+    },
+    "SseMeta": {
+      "type": "object",
+      "description": "payload события meta — всегда первое событие потока",
+      "additionalProperties": false,
+      "required": ["decision", "risk", "provider", "reasons"],
+      "properties": {
+        "decision": {
+          "type": "string",
+          "enum": ["allow_raw", "allow_masked", "allow_summary_only", "deny", "escalate"]
+        },
+        "risk": { "$ref": "#/$defs/SseRisk" },
+        "provider": { "type": "string" },
+        "reasons": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "SseDelta": {
+      "type": "object",
+      "description": "payload события delta — чанк ответа (только при вызове LLM)",
+      "additionalProperties": false,
+      "required": ["content"],
+      "properties": {
+        "content": { "type": "string" }
+      }
+    },
+    "SseDone": {
+      "type": "object",
+      "description": "payload события done — терминальное, успешное завершение",
+      "additionalProperties": false,
+      "required": ["request_id"],
+      "properties": {
+        "request_id": { "type": "string" }
+      }
+    },
+    "SseError": {
+      "type": "object",
+      "description": "payload события error — терминальное, сбой потока",
+      "additionalProperties": false,
+      "required": ["message"],
+      "properties": {
+        "message": { "type": "string" }
+      }
+    }
+  }
+}
