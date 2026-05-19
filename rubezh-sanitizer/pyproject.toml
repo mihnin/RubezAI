@@ -1,0 +1,38 @@
+[project]
+name = "rubezh-sanitizer"
+version = "0.1.0"
+description = "Рубеж ИИ — сервис обезличивания: детекторы ПДн/секретов, маскирование, risk scoring"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.5",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "httpx>=0.27",
+    "ruff>=0.8",
+    "mypy>=1.13",
+]
+
+# Сервис-приложение, не библиотека — проект не собирается в пакет.
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
