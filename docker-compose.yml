@@ -3,7 +3,7 @@
 # Итерация 0 — инфраструктурные сервисы (PostgreSQL + pgvector, MinIO).
 # Прикладные сервисы добавляются в своих итерациях:
 #   migrate          — итерация 1 (добавлен)
-#   rubezh-sanitizer — итерация 2
+#   rubezh-sanitizer — итерация 2 (добавлен)
 #   rubezh-api       — итерация 5
 #   rubezh-worker    — итерация 10
 #   rubezh-web       — итерация 12
@@ -73,6 +73,22 @@ services:
     networks:
       - rubezh
     restart: "no"
+
+  # Сервис обезличивания: детекторы ПДн/секретов, маскирование, risk scoring.
+  rubezh-sanitizer:
+    build: ./rubezh-sanitizer
+    environment:
+      SANITIZER_PORT: 8001
+    ports:
+      - "${SANITIZER_PORT:-8001}:8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    networks:
+      - rubezh
+    restart: unless-stopped
 
 networks:
   rubezh:
