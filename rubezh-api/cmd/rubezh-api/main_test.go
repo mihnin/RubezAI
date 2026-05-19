@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/rubezh-ai/rubezh-api/internal/storage"
 )
 
 func TestHealthcheckAt(t *testing.T) {
@@ -28,6 +30,24 @@ func TestHealthcheckAt(t *testing.T) {
 
 	if code := healthcheckAt("http://127.0.0.1:1/health"); code != 1 {
 		t.Errorf("healthcheckAt(недоступен) = %d, ожидалось 1", code)
+	}
+}
+
+func TestBuildRouter(t *testing.T) {
+	providers := []storage.ModelProvider{
+		{Name: "mock-1", Adapter: "mock", IsEnabled: true},
+		{Name: "ext", Adapter: "openai_compatible", Endpoint: "http://x", IsEnabled: true},
+		{Name: "off", Adapter: "mock", IsEnabled: false},
+	}
+	router := buildRouter(providers, "key")
+	if router.Count() != 2 {
+		t.Errorf("Count = %d, ожидалось 2 (отключённый провайдер пропущен)", router.Count())
+	}
+	if !router.Has("mock-1") || !router.Has("ext") {
+		t.Error("ожидаемые провайдеры не зарегистрированы")
+	}
+	if router.Has("off") {
+		t.Error("отключённый провайдер не должен регистрироваться")
 	}
 }
 
