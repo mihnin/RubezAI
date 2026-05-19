@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 
 from app.domain.entities import EntityType, Match
 from app.domain.sanitization import PseudonymMapping, PublicEntity
@@ -92,9 +93,21 @@ def pseudonymize(
 def restore(
     text: str, mappings: list[PseudonymMapping], cipher: MappingCipher
 ) -> str:
-    """Обратная подстановка: заменяет псевдонимы исходными значениями."""
-    restored = text
-    for mapping in mappings:
-        raw = cipher.decrypt(mapping.raw_value_encrypted)
-        restored = restored.replace(mapping.pseudonym, raw)
-    return restored
+    """Обратная подстановка: заменяет псевдонимы исходными значениями.
+
+    Замена выполняется за один проход (re.sub): вставленное raw-значение не
+    подвергается повторной подстановке, даже если текстуально совпадает с
+    другим псевдонимом. Альтернативы сортируются по длине убыв. — длинный
+    псевдоним матчится раньше короткого с тем же префиксом.
+    """
+    if not mappings:
+        return text
+    raw_by_pseudonym = {
+        mapping.pseudonym: cipher.decrypt(mapping.raw_value_encrypted)
+        for mapping in mappings
+    }
+    pattern = "|".join(
+        re.escape(pseudonym)
+        for pseudonym in sorted(raw_by_pseudonym, key=len, reverse=True)
+    )
+    return re.sub(pattern, lambda match: raw_by_pseudonym[match.group(0)], text)

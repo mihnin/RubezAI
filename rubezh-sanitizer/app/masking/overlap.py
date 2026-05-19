@@ -12,28 +12,43 @@ _CATEGORY_PRIORITY: dict[Category, int] = {
 }
 
 
-def _rank(match: Match) -> tuple[int, float, int]:
-    """Ранг кандидата: категория → уверенность → длина (больше = важнее)."""
-    return (
-        _CATEGORY_PRIORITY[match.category],
-        match.confidence,
-        match.end - match.start,
-    )
+def _weight(match: Match) -> float:
+    """Вес кандидата.
 
-
-def _overlaps(first: Match, second: Match) -> bool:
-    return first.start < second.end and second.start < first.end
+    Приоритет категории доминирует (целые 1..3); уверенность и длина — лишь
+    тай-брейк (надбавки < 0.002, меньше шага между уровнями приоритета).
+    """
+    priority = _CATEGORY_PRIORITY[match.category]
+    return priority + 0.001 * match.confidence + 0.0001 * (match.end - match.start)
 
 
 def resolve_overlaps(matches: list[Match]) -> list[Match]:
-    """Возвращает непересекающийся набор сущностей.
+    """Возвращает непересекающийся набор сущностей максимального суммарного веса.
 
-    При пересечении кандидатов сохраняется более приоритетный. Маскирование
-    требует непересекающихся спанов; результат отсортирован по позиции.
+    Взвешенная задача о расписании интервалов (динамическое программирование):
+    при пересечении сохраняется набор с наибольшим суммарным приоритетом —
+    поэтому два независимых кандидата не теряются из-за общего соседа.
+    Маскирование требует непересекающихся спанов; результат отсортирован
+    по позиции.
     """
-    kept: list[Match] = []
-    for match in sorted(matches, key=_rank, reverse=True):
-        if not any(_overlaps(match, other) for other in kept):
-            kept.append(match)
-    kept.sort(key=lambda m: (m.start, m.end))
-    return kept
+    if not matches:
+        return []
+    ordered = sorted(matches, key=lambda m: (m.end, m.start))
+    count = len(ordered)
+    best = [0.0] * (count + 1)
+    picked: list[list[int]] = [[] for _ in range(count + 1)]
+    for i in range(1, count + 1):
+        candidate = ordered[i - 1]
+        prev = i - 1
+        while prev > 0 and ordered[prev - 1].end > candidate.start:
+            prev -= 1
+        take = _weight(candidate) + best[prev]
+        if take > best[i - 1]:
+            best[i] = take
+            picked[i] = [*picked[prev], i - 1]
+        else:
+            best[i] = best[i - 1]
+            picked[i] = picked[i - 1]
+    chosen = [ordered[index] for index in picked[count]]
+    chosen.sort(key=lambda m: (m.start, m.end))
+    return chosen

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -17,7 +18,7 @@ class SanitizeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     text: str = Field(min_length=1)
-    document_id: str | None = None
+    document_id: UUID | None = None
     context: Literal["chat", "document"]
 
 

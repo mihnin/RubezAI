@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -63,3 +64,64 @@ def test_preview_entity_spans_are_valid() -> None:
     )
     for entity in response.json()["entities"]:
         assert 0 <= entity["start"] < entity["end"] <= len(text)
+
+
+def test_preview_entity_span_matches_raw_hash() -> None:
+    # спан в ответе указывает на тот фрагмент, чей SHA-256 == raw_hash
+    text = "почта ivan@example.ru, ИНН 7707083893"
+    body = client.post(
+        "/sanitize/preview", json={"text": text, "context": "chat"}
+    ).json()
+    for entity in body["entities"]:
+        fragment = text[entity["start"] : entity["end"]]
+        digest = hashlib.sha256(fragment.encode("utf-8")).hexdigest()
+        assert digest == entity["raw_hash"]
+
+
+def test_preview_no_raw_for_all_categories() -> None:
+    raws = [
+        "Иванов Иван Иванович",
+        "7707083893",
+        "AKIAIOSFODNN7EXAMPLE",
+        "SuperSecret123",
+        "5 000 000",
+    ]
+    text = (
+        "Иванов Иван Иванович, ИНН 7707083893, ключ AKIAIOSFODNN7EXAMPLE, "
+        "password=SuperSecret123, сумма 5 000 000 рублей"
+    )
+    body = client.post(
+        "/sanitize/preview", json={"text": text, "context": "chat"}
+    ).json()
+    dumped = json.dumps(body, ensure_ascii=False)
+    for raw in raws:
+        assert raw not in dumped
+
+
+def test_preview_rejects_invalid_document_id() -> None:
+    response = client.post(
+        "/sanitize/preview",
+        json={"text": "x", "context": "chat", "document_id": "not-a-uuid"},
+    )
+    assert response.status_code == 422
+
+
+def test_preview_no_entities_low_risk() -> None:
+    text = "просто текст без чувствительных данных"
+    body = client.post(
+        "/sanitize/preview", json={"text": text, "context": "chat"}
+    ).json()
+    assert body["entities"] == []
+    assert body["sanitized_text"] == text
+    assert body["risk"] == {"score": 0.0, "level": "low", "classes": []}
+
+
+def test_preview_risk_classes_equal_union_of_categories() -> None:
+    body = client.post(
+        "/sanitize/preview",
+        json={
+            "text": "ИНН 7707083893, ключ AKIAIOSFODNN7EXAMPLE, сумма 100 руб.",
+            "context": "chat",
+        },
+    ).json()
+    assert set(body["risk"]["classes"]) == {e["category"] for e in body["entities"]}
