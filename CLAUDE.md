@@ -1,6 +1,6 @@
-# CLAUDE.md — Рубеж ИИ
+# CLAUDE.md
 
-Указания для Claude Code при работе в этом репозитории.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Что это
 
@@ -8,71 +8,137 @@
 Сотрудники безопасно используют LLM; ИБ, юристы и админы контролируют данные,
 модели, политики, инциденты и аудит. Подробно — `docs/ARCHITECTURE.md`.
 
-## Главный принцип
+## Главный архитектурный принцип
 
-**Rules-first, LLM-assisted, policy-decided.** Сначала детерминированные правила
-(regex, словари, NER, secret scanner); локальная LLM лишь подсказывает смысловые
-риски; финальное решение принимает policy engine; всё журналируется.
+**Rules-first, LLM-assisted, policy-decided.** Это определяет всю систему:
 
-## Архитектура (MVP)
+1. Сначала работают **детерминированные** детекторы (regex, словари, secret
+   scanner) — фильтр 1.
+2. Малая локальная русскоязычная LLM **подсказывает** смысловые риски — фильтр
+   2/3. Она подключается через интерфейс `Detector` и **не принимает** решений.
+3. Финальное решение `allow_raw / allow_masked / allow_summary_only / deny /
+   escalate` принимает **policy engine** (Go, `internal/policy`).
+4. Каждое решение и действие журналируется в append-only `audit_events`.
 
-Шесть компонентов: `rubezh-web` (React/TS), `rubezh-api` (Go), `rubezh-sanitizer`
-(Python/FastAPI), `rubezh-worker` (Python), PostgreSQL+pgvector, MinIO. Без
-Redis/Kafka/ClickHouse/Qdrant/K8s в MVP.
+Найденные сущности заменяются обратимыми псевдонимами (`ФИО_001`, `ДОГОВОР_014`);
+raw-значения шифруются (AES-256-GCM) и хранятся отдельно; в ответе LLM псевдонимы
+подставляются обратно. Конвейер — `docs/ARCHITECTURE.md §2.1`.
 
-## Рабочий процесс
+## Архитектура
 
-- **Живой план — `docs/PLAN.md`.** Обновляется в конце каждой итерации.
-- Каждая итерация: TDD → реализация → отдельный управляемый коммит → ревью
-  независимого архитектора → самооценка. При оценке ≥ 9.5/10 пункт в `PLAN.md`
-  зачёркивается.
-- Перед началом новой итерации свериться с `PLAN.md`.
-- **После завершения итерации обновлять `CLAUDE.md` и `docs/PLAN.md`.**
-- Итерации идут автономно, без паузы на подтверждение пользователя. Цель —
-  10/10; при оценке архитектора < 9.5/10 — доработка и повторное ревью того
-  же шага до достижения ≥ 9.5/10.
-- Тесты каждой итерации проектируются с участием QA-агента (функциональное
-  покрытие реального поведения), итог проверяется в CI — GitHub Actions,
-  `.github/workflows/ci.yml`.
+Шесть компонентов (без Redis/Kafka/ClickHouse/Qdrant/K8s — намеренно):
+
+| Сервис | Стек | Роль |
+|--------|------|------|
+| `rubezh-web` | React + TS | UI (итерация 12+) |
+| `rubezh-api` | Go 1.25 | API Gateway, auth, Policy Engine, LLM Router, Audit API |
+| `rubezh-sanitizer` | Python 3.12 / FastAPI | детекция и обезличивание ПДн/секретов/коммерческих данных |
+| `rubezh-worker` | Python | парсинг документов, chunking, embeddings (итерация 10+) |
+| PostgreSQL 16 + pgvector | — | единый source of truth: данные, аудит, embeddings |
+| MinIO | — | object storage документов |
+
+Что важно знать, прежде чем менять код:
+
+- **Контракты между сервисами** — JSON Schema в `docs/contracts/`
+  (`sanitize.schema.json`, `policy.schema.json`). Go и Python обязаны
+  соответствовать; контракт sanitizer проверяется тестом против схемы.
+- **Схемой БД владеет `rubezh-api`** — миграции в `rubezh-api/migrations/`
+  (golang-migrate). БД вручную не создаётся. `audit_events` — append-only
+  (триггер БД); `pseudonym_mappings` — отдельная таблица, raw шифруется.
+- **Очередь worker'а — на PostgreSQL** (`FOR UPDATE SKIP LOCKED`), без брокера.
+- **LLM-streaming — SSE**, не WebSocket (поток токенов однонаправленный).
+- Где код: `rubezh-sanitizer/app/{detectors,masking,domain,api}`,
+  `rubezh-api/internal/{api,auth,policy,llm,audit,storage,config}`.
 
 ## Команды
 
-Go-сервис собирается **только в Docker** (локальный Go SDK не нужен).
+### rubezh-sanitizer (Python, каталог `rubezh-sanitizer/`)
 
-| Действие | Linux/CI | Windows |
-|----------|----------|---------|
-| Инфраструктура | `make infra` | `.\make.ps1 infra` |
-| Проверка compose | `make config` | `.\make.ps1 config` |
-| Остановить | `make infra-down` | `.\make.ps1 infra-down` |
+```
+uv run pytest                                              # все тесты
+uv run pytest tests/test_pii_detectors.py::test_detect_email   # один тест
+uv run ruff check app tests          # линт (добавить --fix для автоправок)
+uv run mypy app                      # проверка типов (strict)
+uv lock                              # пересобрать uv.lock после правки зависимостей
+```
 
-Прямые команды: `docker compose up -d postgres minio`, `docker compose config`.
+### rubezh-api (Go) — собирается и тестируется **только в Docker**
+
+Go SDK локально не установлен. Команды запускать **из PowerShell** (Git Bash
+искажает путь `/src` в аргументах docker). Префикс:
+
+```
+docker run --rm -v c:/dev/RubezAI/rubezh-api:/src -v rubezh-go-cache:/go/pkg/mod -w /src golang:1.25-bookworm
+```
+
+```
+<префикс> go test -race ./...                       # все тесты
+<префикс> go test -run TestParseToken ./internal/auth   # один тест/пакет
+<префикс> sh -c "go vet ./... && gofmt -l ."        # анализ и формат
+<префикс> go mod tidy                               # обновить go.mod/go.sum
+```
+
+### Инфраструктура и сервисы
+
+```
+docker compose up -d --build --wait <service>   # собрать и поднять сервис
+docker compose ps                               # статус
+docker compose run --rm migrate                 # применить миграции БД
+make migrate-verify       (Linux/CI)            # миграции + проверка схемы
+.\make.ps1 migrate-verify (Windows)
+```
+
+`make` / `make.ps1` (зеркала): `infra`, `infra-down`, `config`, `migrate`,
+`migrate-verify`, `ps`, `logs`, `clean`.
+
+## Особенности окружения (Windows)
+
+- **Go — только в Docker** (нет локального SDK); используется `golang:1.25` —
+  это требование `pgx v5.9.2`.
+- **Python локально 3.14, в контейнерах 3.12** — `uv` сам ставит 3.12 по
+  `requires-python`.
+- **Git Bash искажает unix-пути** в аргументах docker (`/src` → `C:/Program
+  Files/Git/src`). Для таких команд использовать PowerShell.
+- **`python -m json.tool` на Windows** читает UTF-8 ответ как cp1251 — для
+  проверки JSON-ответов сервисов читать с явным `encoding="utf-8"`.
+
+## Рабочий процесс
+
+- **Живой план — `docs/PLAN.md`.** Принятые пункты зачёркнуты; технический долг —
+  в секции «Технический долг (бэклог)».
+- Итерации идут **автономно**, без паузы на подтверждение пользователя.
+- Каждая итерация: TDD (тест отдельным коммитом раньше реализации) → QA-агент
+  проектирует функциональные тесты → реализация → отдельный управляемый коммит →
+  ревью независимого архитектора (subagent `Plan`).
+- Порог приёмки — **≥ 9.5/10**, цель — 10. При оценке < 9.5 — доработка и
+  повторное ревью того же шага.
+- **После завершения итерации обновлять `CLAUDE.md` и `docs/PLAN.md`.**
+- CI — GitHub Actions, `.github/workflows/ci.yml`.
 
 ## Конвенции кода
 
 - Файлы ≤ 500 строк, функции ≤ 60 строк (без серьёзного обоснования).
 - Не смешивать domain / API-слой / storage / UI.
-- **TypeScript:** strict mode; без `any` без обоснования; Zod для рантайм-валидации
-  payload'ов; TanStack Query; React Router v7; ESLint + Prettier; тесты — Vitest + RTL.
-- **Python:** 3.12 в контейнерах; FastAPI; Pydantic v2; pytest; Ruff; mypy.
-  Слои: `api / domain / detectors / masking / policy_client / tests`. NER и
-  LLM-review — интерфейсы (mock для MVP).
-- **Go:** 1.23+; пакеты `cmd` + `internal/{api,auth,audit,llm,policy,storage,config}`;
-  `context` во всех I/O; structured logging (`slog`); ошибки оборачивать с
-  контекстом; без глобального состояния; тесты — стандартный `testing`.
 - Все зависимости — в lock-файлах (`package-lock.json`, `go.sum`, `uv.lock`).
+- **Python:** FastAPI; Pydantic v2; Ruff; mypy strict; без `any` без обоснования.
+  NER и LLM-review — интерфейсы (`Detector`), для MVP — mock.
+- **Go:** `context` во всех I/O; structured logging (`slog`); ошибки оборачивать
+  с контекстом (`%w`); без глобального состояния; тесты — стандартный `testing`.
+- **TypeScript:** strict; Zod для рантайм-валидации; TanStack Query; React
+  Router v7; тесты — Vitest + RTL.
 
 ## Безопасность (инварианты)
 
-- Raw secrets **никогда** не пишутся в обычные application logs.
-- Audit log хранит риск-классы и masked representation, не raw.
-- `pseudonym_mappings` — отдельная таблица, шифрование AES-GCM.
+- Raw secrets и raw ПДн **никогда** не пишутся в application logs (доменные
+  модели исключают raw из `repr`).
 - Внешние LLM по умолчанию получают **только masked text**.
-- Все решения policy engine логируются.
-- `audit_events` — append-only.
+- `audit_events` — append-only; хранит риск-классы и masked representation.
+- `pseudonym_mappings` — отдельная таблица, raw зашифрован (AES-256-GCM).
+- Решение allow/deny принимает **только** policy engine; всё логируется.
 - Чеклист — `docs/SECURITY_CHECKLIST.md`; модель угроз — `docs/THREAT_MODEL.md`.
 
 ## Текущий статус
 
 Итерации 0 (9.5), 1 (9), 2 (9), 3 (9.6), 4 (9.6), 5 (9.6) приняты архитектором.
 Следующая — Итерация 6 (Go Policy Engine: движок решений, `/api/policies`).
-Прогресс — `docs/PLAN.md`.
+Прогресс — всегда в `docs/PLAN.md`.
