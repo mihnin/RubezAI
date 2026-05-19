@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.detectors.base import Detector
-from app.detectors.registry import scan
+from app.detectors.registry import default_detectors, scan
 from app.domain.risk import score_risk
 from app.domain.sanitization import SanitizationResult
 from app.masking.crypto import MappingCipher
@@ -12,13 +12,17 @@ from app.masking.pseudonymizer import pseudonymize
 
 
 def sanitize(
-    text: str, cipher: MappingCipher, detectors: list[Detector] | None = None
+    text: str, cipher: MappingCipher, ner: list[Detector] | None = None
 ) -> SanitizationResult:
     """Полный конвейер обезличивания текста.
 
-    Фильтр 1 (regex/словари) → снятие пересечений → оценка риска и
-    псевдонимизация. Фильтр 2/3 (NER/LLM) подключается через ``detectors``.
+    Фильтр 1 — regex-детекторы (`default_detectors`). Фильтр 2/3 — NER/LLM —
+    передаётся в ``ner`` и **дополняет** фильтр 1, а не заменяет его.
+    Далее: снятие пересечений → оценка риска → псевдонимизация.
     """
+    detectors: list[Detector] = list(default_detectors())
+    if ner:
+        detectors.extend(ner)
     matches = resolve_overlaps(scan(text, detectors))
     risk = score_risk(matches)
     sanitized_text, entities, mappings = pseudonymize(text, matches, cipher)

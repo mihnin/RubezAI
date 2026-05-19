@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import bisect
+
 from app.domain.entities import Category, Match
 
 # Приоритет категории при конфликте пересекающихся кандидатов.
@@ -34,14 +36,15 @@ def resolve_overlaps(matches: list[Match]) -> list[Match]:
     if not matches:
         return []
     ordered = sorted(matches, key=lambda m: (m.end, m.start))
+    ends = [m.end for m in ordered]
     count = len(ordered)
     best = [0.0] * (count + 1)
     picked: list[list[int]] = [[] for _ in range(count + 1)]
     for i in range(1, count + 1):
         candidate = ordered[i - 1]
-        prev = i - 1
-        while prev > 0 and ordered[prev - 1].end > candidate.start:
-            prev -= 1
+        # последний непересекающийся предшественник — бинарный поиск по
+        # отсортированным концам спанов: O(log n) вместо линейного O(n)
+        prev = bisect.bisect_right(ends, candidate.start, hi=i - 1)
         take = _weight(candidate) + best[prev]
         if take > best[i - 1]:
             best[i] = take

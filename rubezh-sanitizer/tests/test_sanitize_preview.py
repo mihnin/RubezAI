@@ -4,21 +4,28 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterator
 from pathlib import Path
 
 import jsonschema
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-
-client = TestClient(app)
 
 _SCHEMA_PATH = (
     Path(__file__).parents[2] / "docs" / "contracts" / "sanitize.schema.json"
 )
 
 
-def test_preview_returns_sanitized_response() -> None:
+@pytest.fixture
+def client() -> Iterator[TestClient]:
+    # контекст-менеджер запускает lifespan — app.state.cipher инициализируется
+    with TestClient(app) as test_client:
+        yield test_client
+
+
+def test_preview_returns_sanitized_response(client: TestClient) -> None:
     response = client.post(
         "/sanitize/preview",
         json={"text": "ИНН 7707083893, почта a@b.ru", "context": "chat"},
@@ -28,7 +35,7 @@ def test_preview_returns_sanitized_response() -> None:
     assert {"sanitized_text", "entities", "risk"} <= body.keys()
 
 
-def test_preview_response_has_no_raw_values() -> None:
+def test_preview_response_has_no_raw_values(client: TestClient) -> None:
     secret = "AKIAIOSFODNN7EXAMPLE"
     response = client.post(
         "/sanitize/preview", json={"text": f"ключ {secret}", "context": "chat"}
@@ -41,12 +48,12 @@ def test_preview_response_has_no_raw_values() -> None:
         assert entity["pseudonym"] and entity["raw_hash"]
 
 
-def test_preview_rejects_empty_text() -> None:
+def test_preview_rejects_empty_text(client: TestClient) -> None:
     response = client.post("/sanitize/preview", json={"text": "", "context": "chat"})
     assert response.status_code == 422
 
 
-def test_preview_response_validates_against_contract() -> None:
+def test_preview_response_validates_against_contract(client: TestClient) -> None:
     response = client.post(
         "/sanitize/preview",
         json={"text": "сумма 5 млн рублей по договору № 7/2025", "context": "chat"},
@@ -57,7 +64,7 @@ def test_preview_response_validates_against_contract() -> None:
     jsonschema.validate(instance=body, schema=response_schema)
 
 
-def test_preview_entity_spans_are_valid() -> None:
+def test_preview_entity_spans_are_valid(client: TestClient) -> None:
     text = "почта ivan@example.ru, ИНН 7707083893"
     response = client.post(
         "/sanitize/preview", json={"text": text, "context": "chat"}
@@ -66,7 +73,7 @@ def test_preview_entity_spans_are_valid() -> None:
         assert 0 <= entity["start"] < entity["end"] <= len(text)
 
 
-def test_preview_entity_span_matches_raw_hash() -> None:
+def test_preview_entity_span_matches_raw_hash(client: TestClient) -> None:
     # спан в ответе указывает на тот фрагмент, чей SHA-256 == raw_hash
     text = "почта ivan@example.ru, ИНН 7707083893"
     body = client.post(
@@ -78,7 +85,7 @@ def test_preview_entity_span_matches_raw_hash() -> None:
         assert digest == entity["raw_hash"]
 
 
-def test_preview_no_raw_for_all_categories() -> None:
+def test_preview_no_raw_for_all_categories(client: TestClient) -> None:
     raws = [
         "Иванов Иван Иванович",
         "7707083893",
@@ -98,7 +105,7 @@ def test_preview_no_raw_for_all_categories() -> None:
         assert raw not in dumped
 
 
-def test_preview_rejects_invalid_document_id() -> None:
+def test_preview_rejects_invalid_document_id(client: TestClient) -> None:
     response = client.post(
         "/sanitize/preview",
         json={"text": "x", "context": "chat", "document_id": "not-a-uuid"},
@@ -106,7 +113,7 @@ def test_preview_rejects_invalid_document_id() -> None:
     assert response.status_code == 422
 
 
-def test_preview_no_entities_low_risk() -> None:
+def test_preview_no_entities_low_risk(client: TestClient) -> None:
     text = "просто текст без чувствительных данных"
     body = client.post(
         "/sanitize/preview", json={"text": text, "context": "chat"}
@@ -116,7 +123,7 @@ def test_preview_no_entities_low_risk() -> None:
     assert body["risk"] == {"score": 0.0, "level": "low", "classes": []}
 
 
-def test_preview_risk_classes_equal_union_of_categories() -> None:
+def test_preview_risk_classes_equal_union_of_categories(client: TestClient) -> None:
     body = client.post(
         "/sanitize/preview",
         json={

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from app.detectors.registry import scan
 from app.domain.entities import Category, EntityType
 from app.domain.risk import RiskLevel
 
@@ -31,3 +32,12 @@ def test_category_enum_matches_contract() -> None:
 def test_risk_level_enum_matches_contract() -> None:
     enum = _schema_defs()["Risk"]["properties"]["level"]["enum"]
     assert {level.value for level in RiskLevel} == set(enum)
+
+
+def test_detector_method_values_match_contract() -> None:
+    # значения Match.detector не должны выходить за enum Entity.detector
+    enum = set(_schema_defs()["Entity"]["properties"]["detector"]["enum"])
+    text = "ivan@example.ru ИНН 7707083893 ключ AKIAIOSFODNN7EXAMPLE 5 млн рублей"
+    used = {match.detector for match in scan(text)}
+    assert used
+    assert used <= enum

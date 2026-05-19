@@ -22,6 +22,3 @@ def build_cipher() -> MappingCipher:
         "MAPPING_ENCRYPTION_KEY не задан — используется эфемерный ключ (только dev)"
     )
     return MappingCipher.generate()
-
-
-cipher = build_cipher()
