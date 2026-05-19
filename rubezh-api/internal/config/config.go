@@ -19,7 +19,7 @@ type Config struct {
 // умолчанию. Возвращает ошибку, если обязательные параметры не заданы.
 func Load() (Config, error) {
 	cfg := Config{
-		HTTPPort:     getEnv("API_PORT", "8080"),
+		HTTPPort:     HTTPPort(),
 		LogLevel:     getEnv("API_LOG_LEVEL", "info"),
 		DatabaseURL:  databaseURL(),
 		AuthSecret:   os.Getenv("AUTH_DEV_TOKEN_SECRET"),
@@ -44,6 +44,12 @@ func databaseURL() string {
 		getEnv("POSTGRES_PORT", "5432"),
 		getEnv("POSTGRES_DB", "rubezh"),
 	)
+}
+
+// HTTPPort возвращает порт HTTP-сервера — единый источник для основного
+// сервера и для режима healthcheck (исключает рассинхрон).
+func HTTPPort() string {
+	return getEnv("API_PORT", "8080")
 }
 
 func getEnv(key, fallback string) string {

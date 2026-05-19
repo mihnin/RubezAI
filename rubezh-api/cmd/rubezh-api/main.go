@@ -19,13 +19,14 @@ func main() {
 		os.Exit(healthcheck())
 	}
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-
 	cfg, err := config.Load()
 	if err != nil {
-		logger.Error("ошибка конфигурации", "error", err)
+		slog.Error("ошибка конфигурации", "error", err)
 		os.Exit(1)
 	}
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: logLevel(cfg.LogLevel),
+	}))
 
 	ctx := context.Background()
 	store, err := storage.New(ctx, cfg.DatabaseURL)
@@ -51,15 +52,31 @@ func main() {
 	}
 }
 
-// healthcheck выполняет self-проверку для Docker HEALTHCHECK
-// (образ distroless не содержит shell и curl).
-func healthcheck() int {
-	port := os.Getenv("API_PORT")
-	if port == "" {
-		port = "8080"
+// logLevel переводит строковый уровень из конфигурации в slog.Level.
+func logLevel(level string) slog.Level {
+	switch level {
+	case "debug":
+		return slog.LevelDebug
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
 	}
+}
+
+// healthcheck выполняет self-проверку для Docker HEALTHCHECK
+// (образ distroless не содержит shell и curl). Порт берётся из единого
+// источника config.HTTPPort — тот же, что слушает HTTP-сервер.
+func healthcheck() int {
+	return healthcheckAt("http://127.0.0.1:" + config.HTTPPort() + "/health")
+}
+
+// healthcheckAt возвращает 0, если по адресу отвечает HTTP 200, иначе 1.
+func healthcheckAt(url string) int {
 	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Get("http://127.0.0.1:" + port + "/health")
+	resp, err := client.Get(url)
 	if err != nil {
 		return 1
 	}
