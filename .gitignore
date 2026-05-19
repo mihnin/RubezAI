@@ -216,3 +216,33 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- Рубеж ИИ: Node / frontend (rubezh-web) ---
+node_modules/
+rubezh-web/dist/
+rubezh-web/coverage/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.vite/
+
+# --- Рубеж ИИ: Go (rubezh-api) ---
+# Бинарники сборки; зависимости фиксируются go.mod/go.sum (коммитятся).
+rubezh-api/bin/
+rubezh-api/rubezh-api
+*.exe
+*.test
+*.out
+
+# --- Рубеж ИИ: окружение и данные ---
+# .env уже игнорируется выше; .env.example — коммитится.
+docker-compose.override.yml
+*.local
+
+# --- Рубеж ИИ: рабочие артефакты ТЗ (не часть кодовой базы) ---
+промпт.md
+*.docx
+
+# --- IDE ---
+.idea/
+.vscode/

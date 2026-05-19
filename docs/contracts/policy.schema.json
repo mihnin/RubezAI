@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rubezh-ai/contracts/policy.schema.json",
+  "title": "Контракт Policy Engine: вход и решение",
+  "description": "Внутренний контракт rubezh-api (internal/policy). Финальное решение принимает только policy engine. Enum model_trust зафиксирован заранее (4 значения) намеренно — для стабильности контракта; MVP реализует подмножество (mock + OpenAI-совместимый адаптер).",
+  "$defs": {
+    "PolicyInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model_trust", "risk", "entity_types", "user_role", "context"],
+      "properties": {
+        "model_trust": {
+          "type": "string",
+          "description": "Режим доверия модели. MVP реализует подмножество: external (включая mock) и trusted_local; russian_cloud и on_prem зарезервированы и подключаются без изменения контракта.",
+          "enum": ["external", "russian_cloud", "on_prem", "trusted_local"]
+        },
+        "risk": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["level", "classes", "score"],
+          "properties": {
+            "level": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+            "classes": {
+              "type": "array",
+              "items": { "type": "string", "enum": ["pii", "secret", "commercial"] }
+            },
+            "score": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        },
+        "entity_types": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Типы найденных сущностей (см. sanitize.schema.json#/$defs/Entity)"
+        },
+        "user_role": {
+          "type": "string",
+          "enum": ["user", "security_officer", "compliance_officer", "admin", "auditor", "developer"]
+        },
+        "context": { "type": "string", "enum": ["chat", "document"] }
+      }
+    },
+    "PolicyDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decision", "reasons"],
+      "properties": {
+        "decision": {
+          "type": "string",
+          "enum": ["allow_raw", "allow_masked", "allow_summary_only", "deny", "escalate"]
+        },
+        "matched_policy_id": { "type": ["string", "null"], "format": "uuid" },
+        "matched_policy_version": { "type": ["integer", "null"], "minimum": 1 },
+        "matched_rule": { "type": ["string", "null"] },
+        "reasons": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1,
+          "description": "Человекочитаемые причины решения — попадают в audit event"
+        }
+      }
+    }
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/PolicyInput" },
+    { "$ref": "#/$defs/PolicyDecision" }
+  ]
+}
