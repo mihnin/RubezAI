@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://rubezh-ai/contracts/chat.schema.json",
-  "title": "Контракт chat: /api/chat и /api/chat/sessions",
-  "description": "Описывает тело запроса /api/chat, управление сессиями и payload SSE-событий. Поток /api/chat — Server-Sent Events: каждое событие имеет имя (meta|delta|done|error) и data-payload; JSON Schema ниже описывает именно payload каждого события. Имена событий фиксируются текстом контракта.",
+  "title": "Контракт chat: /api/chat, /api/chat/sessions, /api/chat/sessions/:id/messages",
+  "description": "Описывает тело запроса /api/chat, управление сессиями, чтение истории сессии и payload SSE-событий. Поток /api/chat — Server-Sent Events: каждое событие имеет имя (meta|delta|done|error) и data-payload; JSON Schema ниже описывает именно payload каждого события. Имена событий фиксируются текстом контракта.",
   "$defs": {
     "ChatRequest": {
       "type": "object",
@@ -43,6 +43,73 @@
         "updated_at": { "type": "string", "format": "date-time" }
       }
     },
+    "ChatMessage": {
+      "type": "object",
+      "description": "Сообщение в истории сессии. Контент — псевдонимизированный (см. iteration-8-chat.md §Р6). Поля sanitization_summary опциональны и дают фронту минимум сведений для отрисовки chip'ов псевдонимов без раскрытия raw-значений. raw_hash — публичный SHA-256, его длина в UI обрезается до 8 символов (полное значение — в tooltip).",
+      "additionalProperties": false,
+      "required": ["id", "session_id", "role", "content", "created_at"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "session_id": { "type": "string", "format": "uuid" },
+        "role": { "type": "string", "enum": ["user", "assistant"] },
+        "content": {
+          "type": "string",
+          "description": "Псевдонимизированный текст. Для user-сообщения — sanitized_text; для assistant — ответ LLM до restore (для summary-only — после ре-маскирования)."
+        },
+        "model_provider_id": { "type": ["string", "null"], "format": "uuid" },
+        "request_id": { "type": ["string", "null"] },
+        "sanitization_summary": {
+          "type": ["object", "null"],
+          "description": "Снимок результата sanitize для отрисовки chip'ов псевдонимов. Если null — фронт не отрисовывает превью обезличивания (старые сообщения до Итерации 9 могли быть без снимка).",
+          "additionalProperties": false,
+          "required": ["entity_count", "risk", "entities"],
+          "properties": {
+            "entity_count": { "type": "integer", "minimum": 0 },
+            "risk": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["level", "score", "classes"],
+              "properties": {
+                "level": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+                "score": { "type": "number", "minimum": 0, "maximum": 1 },
+                "classes": {
+                  "type": "array",
+                  "items": { "type": "string", "enum": ["pii", "secret", "commercial"] }
+                }
+              }
+            },
+            "entities": {
+              "type": "array",
+              "description": "Только публичные поля сущности: тип, категория, псевдоним, raw_hash (полный SHA-256). raw-значения и спаны (start/end) не возвращаются — restore истории доступен только через зашифрованный mapping, добавляется в Итерации 9.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["type", "category", "pseudonym", "raw_hash"],
+                "properties": {
+                  "type": { "type": "string" },
+                  "category": { "type": "string", "enum": ["pii", "secret", "commercial"] },
+                  "pseudonym": { "type": "string" },
+                  "raw_hash": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "created_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "ChatMessageList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session_id", "messages"],
+      "properties": {
+        "session_id": { "type": "string", "format": "uuid" },
+        "messages": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ChatMessage" }
+        }
+      }
+    },
     "SseRisk": {
       "type": "object",
       "additionalProperties": false,
@@ -60,7 +127,7 @@
       "type": "object",
       "description": "payload события meta — всегда первое событие потока",
       "additionalProperties": false,
-      "required": ["decision", "risk", "provider", "reasons"],
+      "required": ["decision", "risk", "provider", "reasons", "request_id"],
       "properties": {
         "decision": {
           "type": "string",
@@ -68,7 +135,11 @@
         },
         "risk": { "$ref": "#/$defs/SseRisk" },
         "provider": { "type": "string" },
-        "reasons": { "type": "array", "items": { "type": "string" } }
+        "reasons": { "type": "array", "items": { "type": "string" } },
+        "request_id": {
+          "type": "string",
+          "description": "Коррелятор аудит-событий. Дублируется в meta/done/error, чтобы клиент мог сообщить ИБ-офицеру id запроса при любой стадии потока."
+        }
       }
     },
     "SseDelta": {
@@ -91,11 +162,12 @@
     },
     "SseError": {
       "type": "object",
-      "description": "payload события error — терминальное, сбой потока",
+      "description": "payload события error — терминальное, сбой потока. request_id присутствует ВСЕГДА (генерируется в начале обработки) — это критический коррелятор для расследования инцидентов и сообщения ИБ-офицеру.",
       "additionalProperties": false,
-      "required": ["message"],
+      "required": ["message", "request_id"],
       "properties": {
-        "message": { "type": "string" }
+        "message": { "type": "string" },
+        "request_id": { "type": "string" }
       }
     }
   }

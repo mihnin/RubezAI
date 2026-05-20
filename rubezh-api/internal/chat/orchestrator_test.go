@@ -102,10 +102,11 @@ func (f *fakeStore) auditOfType(eventType string) *storage.AuditEvent {
 }
 
 type fakeSink struct {
-	meta    *MetaEvent
-	deltas  []string
-	doneID  string
-	failMsg string
+	meta     *MetaEvent
+	deltas   []string
+	doneID   string
+	failMsg  string
+	failedID string
 }
 
 func (f *fakeSink) Meta(m MetaEvent) error { f.meta = &m; return nil }
@@ -114,8 +115,12 @@ func (f *fakeSink) Delta(content string) error {
 	return nil
 }
 func (f *fakeSink) Done(requestID string) error { f.doneID = requestID; return nil }
-func (f *fakeSink) Fail(message string) error   { f.failMsg = message; return nil }
-func (f *fakeSink) text() string                { return strings.Join(f.deltas, "") }
+func (f *fakeSink) Fail(message, requestID string) error {
+	f.failMsg = message
+	f.failedID = requestID
+	return nil
+}
+func (f *fakeSink) text() string { return strings.Join(f.deltas, "") }
 
 func baseRequest() Request {
 	return Request{
@@ -150,6 +155,10 @@ func TestOrchestratorAllowMasked(t *testing.T) {
 	}
 	if sink.meta == nil || sink.meta.Decision != "allow_masked" {
 		t.Fatalf("meta = %+v, ожидалось allow_masked", sink.meta)
+	}
+	// M2 ревью этапа A: MetaEvent должен нести RequestID-коррелятор.
+	if sink.meta.RequestID != "r-1" {
+		t.Errorf("meta.request_id = %q, ожидалось %q", sink.meta.RequestID, "r-1")
 	}
 	// в LLM ушёл санированный текст, не исходный
 	if lm.gotText != "Звонил ФИО_001" {
@@ -264,6 +273,10 @@ func TestOrchestratorSanitizerError(t *testing.T) {
 	}
 	if sink.failMsg == "" {
 		t.Error("ожидалось SSE-событие error")
+	}
+	if sink.failedID != "r-1" {
+		t.Errorf("Fail.request_id = %q, ожидалось %q (контракт SseError)",
+			sink.failedID, "r-1")
 	}
 	if lm.called {
 		t.Error("LLM не должен вызываться при сбое sanitizer")

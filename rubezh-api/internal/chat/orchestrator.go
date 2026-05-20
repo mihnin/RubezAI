@@ -97,7 +97,7 @@ func (o *Orchestrator) Handle(
 ) error {
 	prepared, err := o.Prepare(ctx, req)
 	if err != nil {
-		return sink.Fail("ошибка подготовки запроса")
+		return sink.Fail("ошибка подготовки запроса", req.RequestID)
 	}
 	return o.Stream(ctx, req, prepared, sink)
 }
@@ -114,7 +114,7 @@ func (o *Orchestrator) runLLM(
 	if err != nil || resp.Content == "" {
 		o.recordAuditEvent(ctx, o.policyErrorEvent(req, preview, outcome,
 			map[string]any{"stage": "llm"}))
-		return sink.Fail("ошибка вызова модели")
+		return sink.Fail("ошибка вызова модели", req.RequestID)
 	}
 
 	leaked := pmap.DetectLeak(resp.Content)
@@ -131,7 +131,7 @@ func (o *Orchestrator) runLLM(
 				"llm_completed":        true,
 				"audit_persist_failed": true,
 			}))
-		return sink.Fail("ошибка записи ответа")
+		return sink.Fail("ошибка записи ответа", req.RequestID)
 	}
 
 	for _, chunk := range chunkText(streamed, _deltaRunes) {
@@ -155,7 +155,7 @@ func (o *Orchestrator) finishBlocked(
 			"chat_blocked", notice, nil)); err != nil {
 		o.recordAuditEvent(ctx, o.policyErrorEvent(req, preview, outcome,
 			map[string]any{"stage": "record_blocked"}))
-		return sink.Fail("ошибка записи блокировки")
+		return sink.Fail("ошибка записи блокировки", req.RequestID)
 	}
 	return sink.Done(req.RequestID)
 }

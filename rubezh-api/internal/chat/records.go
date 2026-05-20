@@ -140,8 +140,9 @@ func metaFor(
 			Score:   preview.Risk.Score,
 			Classes: preview.Risk.Classes,
 		},
-		Provider: req.Provider,
-		Reasons:  reasons,
+		Provider:  req.Provider,
+		Reasons:   reasons,
+		RequestID: req.RequestID,
 	}
 }
 

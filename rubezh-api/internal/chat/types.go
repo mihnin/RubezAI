@@ -27,12 +27,14 @@ type Store interface {
 	InsertAuditEvent(ctx context.Context, ev storage.AuditEvent) (string, error)
 }
 
-// EventSink — приёмник SSE-событий потока /api/chat.
+// EventSink — приёмник SSE-событий потока /api/chat. Fail принимает
+// requestID, чтобы терминальное событие error (контракт chat.schema.json
+// #SseError) всегда содержало коррелятор для расследования.
 type EventSink interface {
 	Meta(m MetaEvent) error
 	Delta(content string) error
 	Done(requestID string) error
-	Fail(message string) error
+	Fail(message, requestID string) error
 }
 
 // Request — подготовленный HTTP-слоем запрос чата: сессия, провайдер и
@@ -56,10 +58,13 @@ type RiskView struct {
 	Classes []string
 }
 
-// MetaEvent — payload SSE-события meta.
+// MetaEvent — payload SSE-события meta. RequestID — коррелятор аудит-событий,
+// дублируется в meta/done/error, чтобы пользователь имел id запроса в любой
+// момент потока (см. chat.schema.json#SseMeta).
 type MetaEvent struct {
-	Decision string
-	Risk     RiskView
-	Provider string
-	Reasons  []string
+	Decision  string
+	Risk      RiskView
+	Provider  string
+	Reasons   []string
+	RequestID string
 }

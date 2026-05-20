@@ -59,10 +59,11 @@ type sseRiskPayload struct {
 }
 
 type sseMetaPayload struct {
-	Decision string         `json:"decision"`
-	Risk     sseRiskPayload `json:"risk"`
-	Provider string         `json:"provider"`
-	Reasons  []string       `json:"reasons"`
+	Decision  string         `json:"decision"`
+	Risk      sseRiskPayload `json:"risk"`
+	Provider  string         `json:"provider"`
+	Reasons   []string       `json:"reasons"`
+	RequestID string         `json:"request_id"`
 }
 
 type sseDeltaPayload struct {
@@ -73,8 +74,12 @@ type sseDonePayload struct {
 	RequestID string `json:"request_id"`
 }
 
+// sseErrorPayload — терминальный SSE-event error. RequestID присутствует
+// всегда (контракт chat.schema.json#SseError) — это критический коррелятор
+// для расследования инцидентов и сообщения ИБ-офицеру.
 type sseErrorPayload struct {
-	Message string `json:"message"`
+	Message   string `json:"message"`
+	RequestID string `json:"request_id"`
 }
 
 // validate проверяет тело /api/chat против контракта.
@@ -153,8 +158,9 @@ func (s *sseSink) Meta(m chat.MetaEvent) error {
 		Risk: sseRiskPayload{
 			Level: m.Risk.Level, Score: m.Risk.Score, Classes: classes,
 		},
-		Provider: m.Provider,
-		Reasons:  reasons,
+		Provider:  m.Provider,
+		Reasons:   reasons,
+		RequestID: m.RequestID,
 	})
 }
 
@@ -166,8 +172,10 @@ func (s *sseSink) Done(requestID string) error {
 	return s.writeEvent("done", sseDonePayload{RequestID: requestID})
 }
 
-func (s *sseSink) Fail(message string) error {
-	return s.writeEvent("error", sseErrorPayload{Message: message})
+func (s *sseSink) Fail(message, requestID string) error {
+	return s.writeEvent("error", sseErrorPayload{
+		Message: message, RequestID: requestID,
+	})
 }
 
 // listChatSessionsHandler возвращает чат-сессии текущего пользователя.

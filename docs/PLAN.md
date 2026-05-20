@@ -131,7 +131,23 @@
 - **Фазы (TDD):** Ф1 sanitizer-клиент → Ф2 storage (chat/audit/users + миграция dev-users) → Ф3 оркестратор (Prepare/Stream/Handle) → Ф4 HTTP/SSE + контракт `chat.schema.json`.
 - **Закрывает критерии:** 5.
 - **Самооценка:** 10/10.
-- **Архитектор:** ревью реализации 1 — **9.2/10 НА ДОРАБОТКУ** (3 MAJOR + 7 MINOR); ревью 2 — **9.6/10 ПОДТВЕРЖДЕНО** (все MAJOR/MINOR закрыты, остались 3 косметических); 3 косметические правки внесены → **10/10**. ADR идентичности — `docs/design/identity.md`; THREAT_MODEL §6 расширен остаточными рисками.
+- **Архитектор:** ревью реализации 1 — **9.2/10 НА ДОРАБОТКУ** (3 MAJOR + 7 MINOR); ревью 2 — **9.6/10 ПОДТВЕРЖДЕНО** (все MAJOR/MINOR закрыты, остались 3 косметических); 3 косметические правки внесены → **10/10**. ADR идентичности — `docs/design/identity.md`; THREAT_MODEL §6 расширен остаточными рисками. **Ретро-правка после ревью этапа A (M2):** `SseError`/`SseMeta` получили `request_id` — коррелятор во всех терминальных событиях; контрактные и SSE-тесты обновлены.
+
+### ~~Этап A — UX/UI дизайн перед frontend-итерациями~~ ✅ Принято 9.7/10
+
+- **Цель:** дизайн-система и hi-fi UX-спецификации перед Итерациями 12–15 (frontend). Stitch MCP в сессии оказался недоступен → fallback: textual hi-fi spec.
+- **Артефакты:**
+  - `docs/design/ui-trends-2026.md` — тренды (bento, dark-first, AI-native, density, WCAG 2.2 AA, SSE-стрим UX, SOC-дашборды, DLP-editor, audit-log).
+  - `docs/design/ui-scope.md` — матрица «6 ролей × 6 экранов × состояния», доступ.
+  - `docs/design/ui-system.md` — двухслойные токены (primitive HSL + semantic), типографика, сетка, компоненты, motion, accessibility.
+  - `docs/design/ui/{login,chat,documents,policies,models,audit-log,incidents}.md` — hi-fi spec каждого экрана.
+- **Архитектор:** ревью 1 — **8.7/10 НА ДОРАБОТКУ** (5 MAJOR); ревью 2 — **9.7/10 ПРИНЯТО**. MAJOR'ы закрыты:
+  - **M1** auth-flow: localStorage+Bearer (точка замены — OIDC); ADR в `identity.md`.
+  - **M2** `SseError`/`SseMeta` получили `request_id` (ретро-правка Итерации 8); тесты зелёные.
+  - **M3** `GET /api/chat/sessions/:id/messages` + `$defs.ChatMessage`/`ChatMessageList` в контракте.
+  - **M4** `docs/API.md` переписан под фактические контракты (schema-as-source-of-truth).
+  - **M5** `ui/chat.md` уточнён: длина hash в tooltip, источник entities при reload, 4 состояния диалога «Превью».
+- **Открытый техдолг этапа A (MINOR, не блокирует Итерацию 9):** заметки архитектора в задаче A.6 (m1–m12 первого ревью, см. истории ревью).
 
 ### ☐ Итерация 9 — Go: Audit и Incidents
 
@@ -227,3 +243,5 @@
 | 8 — план, ревью 3 | 2026-05-19 | 9.6/10 | ГОТОВ К РЕАЛИЗАЦИИ — план принят |
 | 8 — реализация, ревью 1 | 2026-05-20 | 9.2/10 | На доработку — 3 MAJOR + 7 MINOR |
 | 8 — реализация, ревью 2 | 2026-05-20 | 9.6/10 | ПОДТВЕРЖДЕНО; 3 косметических MINOR устранены → 10/10 |
+| A — дизайн, ревью 1 | 2026-05-20 | 8.7/10 | На доработку — 5 MAJOR (auth-flow, SseError.request_id, history endpoint, API.md sync, chat.md uncertainties) |
+| A — дизайн, ревью 2 | 2026-05-20 | 9.7/10 | ПРИНЯТО К РЕАЛИЗАЦИИ — все 5 MAJOR закрыты, контракт+код+тесты+UX-spec симметричны |

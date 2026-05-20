@@ -59,9 +59,10 @@ func registerProvider(t *testing.T, store *storage.Storage, router *llm.Router) 
 // fakeChatOrchestrator — заглушка оркестратора для тестов HTTP-слоя.
 // Реализует Prepare/Stream — раздельная подготовка и стрим (MAJOR-2 плана).
 type fakeChatOrchestrator struct {
-	gotReq     chat.Request
-	prepareErr error
-	streamErr  error
+	gotReq      chat.Request
+	prepareErr  error
+	streamErr   error
+	streamFails bool // если true — Stream завершится sink.Fail вместо Done
 }
 
 func (f *fakeChatOrchestrator) Prepare(
@@ -76,8 +77,12 @@ func (f *fakeChatOrchestrator) Stream(
 	_ chat.Prepared, sink chat.EventSink,
 ) error {
 	_ = sink.Meta(chat.MetaEvent{
-		Decision: "allow_raw", Provider: req.Provider, Reasons: []string{},
+		Decision: "allow_raw", Provider: req.Provider,
+		Reasons: []string{}, RequestID: req.RequestID,
 	})
+	if f.streamFails {
+		return sink.Fail("тестовый сбой", req.RequestID)
+	}
 	_ = sink.Delta("тестовый ответ")
 	if err := sink.Done(req.RequestID); err != nil {
 		return err
@@ -124,6 +129,46 @@ func TestChatHandlerStreamsEvents(t *testing.T) {
 	}
 	if orch.gotReq.UserID == "" || orch.gotReq.RequestID == "" {
 		t.Error("UserID/RequestID не заполнены")
+	}
+	// Контракт chat.schema.json#SseMeta/#SseDone требует request_id во всех
+	// терминальных payload'ах — это критический коррелятор для расследования.
+	wantID := `"request_id":"` + orch.gotReq.RequestID + `"`
+	if !strings.Contains(out, wantID) {
+		t.Errorf("SSE-поток не содержит request_id (%s) ни в meta, ни в done: %s",
+			orch.gotReq.RequestID, out)
+	}
+}
+
+// TestChatHandlerErrorEventCarriesRequestID — закрывает M2 ревью этапа A:
+// SSE event:error должен нести request_id (chat.schema.json#SseError).
+func TestChatHandlerErrorEventCarriesRequestID(t *testing.T) {
+	store, closeStore := dbStore(t)
+	defer closeStore()
+	router := llm.NewRouter()
+	name := registerProvider(t, store, router)
+	orch := &fakeChatOrchestrator{streamFails: true}
+
+	body := `{"message":"привет","provider":"` + name + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/chat",
+		bytes.NewBufferString(body))
+	req.Header.Set("Authorization", userToken())
+	rec := httptest.NewRecorder()
+	chatTestHandler(orch, store, router).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d, ожидалось 200 (SSE открыт до Fail)", rec.Code)
+	}
+	out := rec.Body.String()
+	if !strings.Contains(out, "event: error") {
+		t.Fatalf("SSE-поток не содержит event: error: %s", out)
+	}
+	wantID := `"request_id":"` + orch.gotReq.RequestID + `"`
+	if !strings.Contains(out, wantID) {
+		t.Errorf("event:error не содержит request_id (%s): %s",
+			orch.gotReq.RequestID, out)
+	}
+	if !strings.Contains(out, `"message":"тестовый сбой"`) {
+		t.Errorf("event:error не содержит message: %s", out)
 	}
 }
 
