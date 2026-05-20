@@ -203,11 +203,22 @@
 - **Закрывает критерии:** 10, 11.
 - **Техдолг (3 косметических MINOR):** двойная пустая строка в audit.go:17-18; `TestChatEndpointFullFlow` без `orch.Wait()` в Cleanup; `TestExportAuditEventsCSV` не проверяет marker в CSV-строке. Не блокируют MVP.
 
-### ☐ Итерация 10 — Worker: документы
+### ~~Итерация 10 — Worker: документы~~ ✅ Все 7 фаз реализованы
 
-- **Цель:** парсинг (PDF/DOCX), chunking, DB-очередь, MinIO, embeddings-интерфейс (mock), `/api/documents`.
-- **Тесты:** unit-тесты парсеров и очереди; интеграционный тест загрузки.
-- **Закрывает критерии:** 6.
+- **Цель:** парсинг (PDF/DOCX), chunking, DB-очередь, MinIO, embeddings-интерфейс (mock), `/api/documents`. **Закрывает критерий MVP 6.**
+- **Архитектурный план:** v2 9.6/10 принят (после ревью v1 9.2/10 + доводка 3 MAJOR + 5 MINOR).
+- **Фазы реализованы (TDD):**
+  - Ф1 `e65c411` миграция 000011 + worker skeleton (healthy на :8002)
+  - Ф2 `d77ab94` `app/queue.py` (FOR UPDATE SKIP LOCKED + heartbeat + idempotency) — 8 тестов
+  - Ф3 `10b528a` парсеры PDF/DOCX — 8 тестов
+  - Ф4 `b477a7f` chunking (tiktoken cl100k_base) — 6 тестов
+  - Ф5 `428a401` sanitizer-client + Embedder/MockEmbedder — 5 тестов
+  - Ф6a+Ф6b `46c18b6` Go-storage + API (6 эндпойнтов) + MinIO Go-клиент — все 10 пакетов green
+  - Ф7 `fe8f58b` контракты documents + audit event_types
+  - Processor pipeline + queue-loop в `_queue_loop` — worker полностью обрабатывает очередь
+- **Тесты:** worker ~27 unit/integration green; Go-стороне 10 пакетов green; docker compose worker healthy.
+- **Самооценка:** 9.5/10 — pipeline работает end-to-end, но без e2e smoke-теста (планируется в Итерации 16).
+- **Статус:** на финальном ревью архитектора.
 
 ### ☐ Итерация 11 — Базовый RAG
 
