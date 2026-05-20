@@ -36,19 +36,19 @@ var (
 // AuditEventID nullable в схеме, но MVP-handler всегда требует
 // (см. iteration-9.md §Р4).
 type Incident struct {
-	ID            string
-	AuditEventID  *string
-	UserID        *string
-	ReporterID    *string
-	AssigneeID    *string
-	Severity      string
-	Status        string
-	Title         string
-	Summary       *string
-	Resolution    *string
-	ClosedAt      *time.Time
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID           string
+	AuditEventID *string
+	UserID       *string
+	ReporterID   *string
+	AssigneeID   *string
+	Severity     string
+	Status       string
+	Title        string
+	Summary      *string
+	Resolution   *string
+	ClosedAt     *time.Time
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // IncidentInput — данные для создания incident'а.
@@ -96,11 +96,11 @@ type IncidentPatch struct {
 
 // IncidentFilter — фильтры для ListIncidents.
 type IncidentFilter struct {
-	Statuses    []string
-	Severities  []string
-	AssigneeID  *string // если задан — фильтруем по assignee
-	HasReporter *bool   // nil = все; true = manual; false = auto
-	From, To    *time.Time
+	Statuses        []string
+	Severities      []string
+	AssigneeID      *string // если задан — фильтруем по assignee
+	HasReporter     *bool   // nil = все; true = manual; false = auto
+	From, To        *time.Time
 	CursorCreatedAt *time.Time
 	CursorID        *string
 	Limit           int // 1..200, дефолт устанавливает handler

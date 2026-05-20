@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/rubezh-ai/rubezh-api/internal/crypto"
@@ -26,11 +27,14 @@ type Prepared struct {
 }
 
 // Orchestrator выполняет сквозной поток запроса /api/chat.
+// asyncWG отслеживает фоновые задачи (auto-incident после sink.Done) —
+// см. Wait() для graceful shutdown и тестов.
 type Orchestrator struct {
 	sanitizer SanitizerClient
 	llm       LLMRouter
 	store     Store
 	cipher    *crypto.Cipher // nil — Tx1 mappings не записываются (тесты)
+	asyncWG   sync.WaitGroup
 }
 
 // NewOrchestrator создаёт оркестратор с зависимостями.
@@ -41,6 +45,20 @@ func NewOrchestrator(
 	s SanitizerClient, l LLMRouter, st Store, cipher *crypto.Cipher,
 ) *Orchestrator {
 	return &Orchestrator{sanitizer: s, llm: l, store: st, cipher: cipher}
+}
+
+// Wait блокирует до завершения всех фоновых задач (auto-incident
+// после sink.Done). Используется в тестах для детерминизма и в
+// graceful shutdown (можно вызвать перед closing storage pool).
+func (o *Orchestrator) Wait() { o.asyncWG.Wait() }
+
+// goAsync — запускает фоновую задачу с трекингом через asyncWG.
+func (o *Orchestrator) goAsync(fn func()) {
+	o.asyncWG.Add(1)
+	go func() {
+		defer o.asyncWG.Done()
+		fn()
+	}()
 }
 
 // Prepare выполняет подготовительные шаги: sanitize → карта псевдонимов →
@@ -184,21 +202,30 @@ func (o *Orchestrator) runLLM(
 		return sink.Fail("ошибка записи ответа", req.RequestID)
 	}
 
-	// Авто-инцидент при response_leak_detected (план §Р4). Сбой
-	// CreateAutoIncident НЕ валит основной поток — пользователь уже
-	// получает ответ. Внутри пишет либо incident_created_auto
-	// (atomic Tx3), либо incident_create_failed (отдельный event-тип).
-	o.createAutoIncidentIfNeeded(ctx, req,
-		preview.Risk.Level, preview.Risk.Classes,
-		terminationIDs.AuditEventID, len(leaked) > 0,
-		string(outcome.Decision))
-
 	for _, chunk := range chunkText(streamed, _deltaRunes) {
 		if err := sink.Delta(chunk); err != nil {
 			return fmt.Errorf("chat: отправка delta: %w", err)
 		}
 	}
-	return sink.Done(req.RequestID)
+	doneErr := sink.Done(req.RequestID)
+
+	// Авто-инцидент при response_leak_detected (план §Р4) — В ГОРУТИНЕ
+	// ПОСЛЕ sink.Done (закрытие MAJOR-3 ревью реализации Итерации 9:
+	// раньше Tx3 врезалась между Tx2 и done, добавляя до _auditTimeout
+	// латентности к ответу пользователя). Контекст внутри функции
+	// detached через withDetachedTimeout — отмена клиента не влияет.
+	// asyncWG позволяет тестам и graceful-shutdown дождаться завершения.
+	risk := preview.Risk.Level
+	classes := preview.Risk.Classes
+	auditEvID := terminationIDs.AuditEventID
+	leakDetected := len(leaked) > 0
+	decision := string(outcome.Decision)
+	o.goAsync(func() {
+		o.createAutoIncidentIfNeeded(
+			ctx, req, risk, classes, auditEvID, leakDetected, decision)
+	})
+
+	return doneErr
 }
 
 // finishBlocked обрабатывает deny/escalate: LLM не вызывается, Tx2 детачем.
@@ -218,13 +245,20 @@ func (o *Orchestrator) finishBlocked(
 		return sink.Fail("ошибка записи блокировки", req.RequestID)
 	}
 
-	// Авто-инцидент при deny/escalate (план §Р4).
-	o.createAutoIncidentIfNeeded(ctx, req,
-		preview.Risk.Level, preview.Risk.Classes,
-		terminationIDs.AuditEventID, false,
-		string(outcome.Decision))
+	doneErr := sink.Done(req.RequestID)
 
-	return sink.Done(req.RequestID)
+	// Авто-инцидент при deny/escalate (план §Р4) — в горутине после
+	// sink.Done; см. комментарий в runLLM (MAJOR-3 ревью).
+	risk := preview.Risk.Level
+	classes := preview.Risk.Classes
+	auditEvID := terminationIDs.AuditEventID
+	decision := string(outcome.Decision)
+	o.goAsync(func() {
+		o.createAutoIncidentIfNeeded(
+			ctx, req, risk, classes, auditEvID, false, decision)
+	})
+
+	return doneErr
 }
 
 // recordAuditEvent — best-effort запись audit-события контекстом без отмены.

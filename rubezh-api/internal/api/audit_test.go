@@ -123,9 +123,10 @@ func TestGetAuditEventForSecurityOfficerOK(t *testing.T) {
 }
 
 func TestExportAuditEventsCSV(t *testing.T) {
-	router, _, closeStore := fullTestRouter(t)
+	router, store, closeStore := fullTestRouter(t)
 	defer closeStore()
-	body := `{"format":"csv","include_payload":false}`
+	body := `{"format":"csv","include_payload":false,` +
+		`"filters":{"event_types":["chat_request"]}}`
 	req := httptest.NewRequest(http.MethodPost,
 		"/api/audit-events/export", strings.NewReader(body))
 	req.Header.Set("Authorization", roleToken(auth.RoleSecurityOfficer))
@@ -140,6 +141,28 @@ func TestExportAuditEventsCSV(t *testing.T) {
 	}
 	if cd := rec.Header().Get("Content-Disposition"); !strings.Contains(cd, "audit-export-") {
 		t.Errorf("Content-Disposition = %q", cd)
+	}
+
+	// MINOR-10 ревью v2: export должен ПИСАТЬ audit-event audit_exported
+	// (compliance-инвариант). Проверяем что запись существует.
+	rows, err := store.ListAuditEvents(context.Background(),
+		storage.AuditFilter{
+			EventTypes: []string{"audit_exported"}, Limit: 10,
+		})
+	if err != nil {
+		t.Fatalf("ListAuditEvents: %v", err)
+	}
+	found := false
+	for _, r := range rows {
+		var det map[string]any
+		_ = json.Unmarshal(r.Detail, &det)
+		if det["format"] == "csv" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("audit-event audit_exported (format=csv) не записан")
 	}
 }
 

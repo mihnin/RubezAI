@@ -12,8 +12,8 @@ import (
 // chatMessageListDTO — ответ GET /api/chat/sessions/:id/messages
 // (контракт chat.schema.json#ChatMessageList).
 type chatMessageListDTO struct {
-	SessionID string                            `json:"session_id"`
-	Messages  []storage.ChatMessageWithSummary  `json:"messages"`
+	SessionID string                           `json:"session_id"`
+	Messages  []storage.ChatMessageWithSummary `json:"messages"`
 }
 
 // listChatMessagesHandler возвращает историю сообщений сессии.

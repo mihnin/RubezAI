@@ -25,9 +25,9 @@ func TestListChatMessagesOwnerSeesHistory(t *testing.T) {
 	}
 	// Засеять user-сообщение через RecordChatRequest с entities (включая start/end).
 	_, err = store.RecordChatRequest(ctx, storage.ChatRequestRecord{
-		SessionID: session.ID,
+		SessionID:   session.ID,
 		UserContent: "Привет ФИО_001",
-		RequestID: "r-history-1",
+		RequestID:   "r-history-1",
 		Sanitization: storage.SanitizationData{
 			RiskLevel: "medium", RiskScore: 0.5,
 			RiskClasses: []string{"pii"},

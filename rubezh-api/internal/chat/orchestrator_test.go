@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/rubezh-ai/rubezh-api/internal/llm"
@@ -43,7 +44,10 @@ func (f *fakeLLM) Complete(
 	return f.resp, f.err
 }
 
+// fakeStore — потокобезопасный mock (auto-incident идёт в горутине
+// после sink.Done; см. orchestrator.go MAJOR-3 ревью).
 type fakeStore struct {
+	mu                sync.Mutex
 	requestErr        error
 	terminationErr    error
 	incidentCreateErr error
@@ -56,6 +60,8 @@ type fakeStore struct {
 func (f *fakeStore) RecordChatRequest(
 	_ context.Context, rec storage.ChatRequestRecord,
 ) (storage.ChatRequestIDs, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.requestErr != nil {
 		return storage.ChatRequestIDs{}, f.requestErr
 	}
@@ -69,6 +75,8 @@ func (f *fakeStore) RecordChatRequest(
 func (f *fakeStore) RecordChatTermination(
 	_ context.Context, rec storage.ChatTerminationRecord,
 ) (storage.ChatTerminationIDs, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.terminationErr != nil {
 		return storage.ChatTerminationIDs{}, f.terminationErr
 	}
@@ -82,6 +90,8 @@ func (f *fakeStore) RecordChatTermination(
 func (f *fakeStore) InsertAuditEvent(
 	_ context.Context, ev storage.AuditEvent,
 ) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.audits = append(f.audits, ev)
 	return "ae", nil
 }
@@ -89,6 +99,8 @@ func (f *fakeStore) InsertAuditEvent(
 func (f *fakeStore) CreateAutoIncident(
 	_ context.Context, inc storage.IncidentInput, ev storage.AuditEvent,
 ) (storage.Incident, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.incidentCreateErr != nil {
 		return storage.Incident{}, "", f.incidentCreateErr
 	}
@@ -99,6 +111,8 @@ func (f *fakeStore) CreateAutoIncident(
 }
 
 func (f *fakeStore) auditTypes() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	types := make([]string, len(f.audits))
 	for i, a := range f.audits {
 		types[i] = a.EventType
@@ -107,12 +121,22 @@ func (f *fakeStore) auditTypes() []string {
 }
 
 func (f *fakeStore) auditOfType(eventType string) *storage.AuditEvent {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	for i := range f.audits {
 		if f.audits[i].EventType == eventType {
-			return &f.audits[i]
+			// возвращаем копию, чтобы за пределами Lock'а данные не менялись
+			cp := f.audits[i]
+			return &cp
 		}
 	}
 	return nil
+}
+
+func (f *fakeStore) incidentsCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.incidents)
 }
 
 type fakeSink struct {
@@ -144,6 +168,22 @@ func baseRequest() Request {
 	}
 }
 
+// handleAndWait — создаёт Orchestrator, вызывает Handle и ждёт
+// завершения фоновых горутин (auto-incident после sink.Done).
+// Используется для детерминизма тестов: без Wait() len(store.audits)
+// нестабилен из-за асинхронной записи incident_created_auto.
+func handleAndWait(
+	t *testing.T, san SanitizerClient, lm LLMRouter, store Store,
+	sink EventSink, req Request, ctx context.Context,
+) {
+	t.Helper()
+	orch := NewOrchestrator(san, lm, store, nil)
+	if err := orch.Handle(ctx, req, sink); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	orch.Wait()
+}
+
 // maskedPreview — ответ sanitizer для текста "Звонил Иванову" с одной
 // PII-сущностью (риск medium → решение allow_masked для external).
 func maskedPreview() sanitizer.PreviewResponse {
@@ -163,10 +203,7 @@ func TestOrchestratorAllowMasked(t *testing.T) {
 	store := &fakeStore{}
 	sink := &fakeSink{}
 
-	if err := NewOrchestrator(san, lm, store, nil).Handle(
-		context.Background(), baseRequest(), sink); err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
+	handleAndWait(t, san, lm, store, sink, baseRequest(), context.Background())
 	if sink.meta == nil || sink.meta.Decision != "allow_masked" {
 		t.Fatalf("meta = %+v, ожидалось allow_masked", sink.meta)
 	}
@@ -200,10 +237,7 @@ func TestOrchestratorDeny(t *testing.T) {
 	store := &fakeStore{}
 	sink := &fakeSink{}
 
-	if err := NewOrchestrator(san, lm, store, nil).Handle(
-		context.Background(), baseRequest(), sink); err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
+	handleAndWait(t, san, lm, store, sink, baseRequest(), context.Background())
 	if sink.meta == nil || sink.meta.Decision != "deny" {
 		t.Fatalf("meta = %+v, ожидалось deny", sink.meta)
 	}
@@ -223,8 +257,8 @@ func TestOrchestratorDeny(t *testing.T) {
 		got[2] != "incident_created_auto" {
 		t.Errorf("аудит = %v, ожидалось [chat_request chat_blocked incident_created_auto]", got)
 	}
-	if len(store.incidents) != 1 {
-		t.Errorf("ожидался 1 incident, создано %d", len(store.incidents))
+	if c := store.incidentsCount(); c != 1 {
+		t.Errorf("ожидался 1 incident, создано %d", c)
 	}
 }
 
@@ -263,10 +297,7 @@ func TestOrchestratorSummaryOnly(t *testing.T) {
 	store := &fakeStore{}
 	sink := &fakeSink{}
 
-	if err := NewOrchestrator(san, lm, store, nil).Handle(
-		context.Background(), baseRequest(), sink); err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
+	handleAndWait(t, san, lm, store, sink, baseRequest(), context.Background())
 	if sink.meta.Decision != "allow_summary_only" {
 		t.Fatalf("decision = %q", sink.meta.Decision)
 	}
@@ -322,10 +353,7 @@ func TestOrchestratorBadSpan(t *testing.T) {
 	store := &fakeStore{}
 	sink := &fakeSink{}
 
-	if err := NewOrchestrator(san, lm, store, nil).Handle(
-		context.Background(), baseRequest(), sink); err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
+	handleAndWait(t, san, lm, store, sink, baseRequest(), context.Background())
 	if sink.failMsg == "" {
 		t.Error("некорректный спан должен давать SSE error (fail-closed)")
 	}
@@ -354,10 +382,7 @@ func TestOrchestratorLLMError(t *testing.T) {
 	store := &fakeStore{}
 	sink := &fakeSink{}
 
-	if err := NewOrchestrator(san, lm, store, nil).Handle(
-		context.Background(), baseRequest(), sink); err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
+	handleAndWait(t, san, lm, store, sink, baseRequest(), context.Background())
 	if sink.failMsg == "" {
 		t.Error("ожидалось SSE-событие error")
 	}
@@ -377,10 +402,7 @@ func TestOrchestratorLeakDetected(t *testing.T) {
 	store := &fakeStore{}
 	sink := &fakeSink{}
 
-	if err := NewOrchestrator(san, lm, store, nil).Handle(
-		context.Background(), baseRequest(), sink); err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
+	handleAndWait(t, san, lm, store, sink, baseRequest(), context.Background())
 	resp := store.auditOfType("chat_response")
 	if resp == nil {
 		t.Fatal("нет audit-события chat_response")
@@ -396,10 +418,7 @@ func TestOrchestratorTerminationError(t *testing.T) {
 	store := &fakeStore{terminationErr: errors.New("сбой БД")}
 	sink := &fakeSink{}
 
-	if err := NewOrchestrator(san, lm, store, nil).Handle(
-		context.Background(), baseRequest(), sink); err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
+	handleAndWait(t, san, lm, store, sink, baseRequest(), context.Background())
 	if sink.failMsg == "" {
 		t.Error("сбой Транзакции 2 должен давать SSE error")
 	}
@@ -504,10 +523,7 @@ func TestOrchestratorRejectsOverlappingSpans(t *testing.T) {
 	store := &fakeStore{}
 	sink := &fakeSink{}
 
-	if err := NewOrchestrator(san, lm, store, nil).Handle(
-		context.Background(), baseRequest(), sink); err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
+	handleAndWait(t, san, lm, store, sink, baseRequest(), context.Background())
 	if sink.failMsg == "" {
 		t.Error("пересекающиеся спаны должны давать SSE error (fail-closed)")
 	}

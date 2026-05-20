@@ -67,21 +67,8 @@ type incidentPatchDTO struct {
 	Resolution    *string `json:"resolution"`
 }
 
-type incidentNoteDTO struct {
-	ID         string    `json:"id"`
-	IncidentID string    `json:"incident_id"`
-	AuthorID   string    `json:"author_id"`
-	Content    string    `json:"content"`
-	CreatedAt  time.Time `json:"created_at"`
-}
-
-type incidentNoteListDTO struct {
-	Notes []incidentNoteDTO `json:"notes"`
-}
-
-type incidentNoteCreateDTO struct {
-	Content string `json:"content"`
-}
+// incidentNoteDTO/incidentNoteListDTO/incidentNoteCreateDTO + handlers
+// — вынесены в incidents_notes.go (бюджет файла ≤500 строк).
 
 // resolveTrigger — computed-поле trigger из связанного audit_event'а.
 // План §Р4: manual ⇒ "manual"; auto ⇒ из event_type+detail audit-события.
@@ -302,7 +289,8 @@ func createIncidentHandler(store *storage.Storage) http.HandlerFunc {
 	}
 }
 
-// patchIncidentHandler — PATCH /api/incidents/:id с If-Match.
+// patchIncidentHandler — PATCH /api/incidents/:id с If-Match (RFC 7232).
+// Декомпозирован на parsePatchIfMatch + executeIncidentPatch (≤60 строк).
 func patchIncidentHandler(store *storage.Storage) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		role, _ := auth.RoleFromContext(r.Context())
@@ -315,16 +303,8 @@ func patchIncidentHandler(store *storage.Storage) http.HandlerFunc {
 			http.NotFound(w, r)
 			return
 		}
-		ifMatch := r.Header.Get("If-Match")
-		if ifMatch == "" {
-			http.Error(w, "If-Match header required (RFC 7232)",
-				http.StatusPreconditionRequired)
-			return
-		}
-		expected, err := time.Parse(time.RFC3339Nano, ifMatch)
-		if err != nil {
-			http.Error(w, "If-Match: ожидался RFC3339Nano",
-				http.StatusBadRequest)
+		expected, ok := parsePatchIfMatch(w, r)
+		if !ok {
 			return
 		}
 		var dto incidentPatchDTO
@@ -338,40 +318,67 @@ func patchIncidentHandler(store *storage.Storage) http.HandlerFunc {
 				http.StatusInternalServerError)
 			return
 		}
-		patch, audits, err := buildIncidentPatch(dto, actorID)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		prev, err := store.GetIncident(r.Context(), id)
-		if errors.Is(err, storage.ErrIncidentNotFound) {
-			http.NotFound(w, r)
-			return
-		}
-		if err != nil {
-			http.Error(w, "ошибка чтения", http.StatusInternalServerError)
-			return
-		}
-		audits = enrichAuditsWithFrom(audits, prev, patch)
-		inc, _, err := store.PatchIncident(r.Context(), id, patch,
-			expected, audits)
-		if errors.Is(err, storage.ErrIncidentNotFound) {
-			http.NotFound(w, r)
-			return
-		}
-		if errors.Is(err, storage.ErrIncidentConflict) {
-			http.Error(w, "If-Match mismatch",
-				http.StatusPreconditionFailed)
-			return
-		}
-		if err != nil {
-			http.Error(w, "ошибка обновления",
-				http.StatusInternalServerError)
-			return
-		}
-		writeJSON(w, http.StatusOK,
-			incidentToDTO(inc, resolveTrigger(r.Context(), inc, store)))
+		executeIncidentPatch(w, r, store, id, expected, dto, actorID)
 	}
+}
+
+// parsePatchIfMatch читает и валидирует If-Match header (RFC 7232).
+// При отсутствии — 428; при невалидном формате — 400.
+func parsePatchIfMatch(
+	w http.ResponseWriter, r *http.Request,
+) (time.Time, bool) {
+	ifMatch := r.Header.Get("If-Match")
+	if ifMatch == "" {
+		http.Error(w, "If-Match header required (RFC 7232)",
+			http.StatusPreconditionRequired)
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339Nano, ifMatch)
+	if err != nil {
+		http.Error(w, "If-Match: ожидался RFC3339Nano",
+			http.StatusBadRequest)
+		return time.Time{}, false
+	}
+	return t, true
+}
+
+// executeIncidentPatch — фактическое выполнение PATCH. Вынесено из
+// handler'а, чтобы каждая функция была ≤60 строк (план §4).
+func executeIncidentPatch(
+	w http.ResponseWriter, r *http.Request, store *storage.Storage,
+	id string, expected time.Time, dto incidentPatchDTO, actorID string,
+) {
+	patch, audits, err := buildIncidentPatch(dto, actorID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	prev, err := store.GetIncident(r.Context(), id)
+	if errors.Is(err, storage.ErrIncidentNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Error(w, "ошибка чтения", http.StatusInternalServerError)
+		return
+	}
+	audits = enrichAuditsWithFrom(audits, prev, patch)
+	inc, _, err := store.PatchIncident(r.Context(), id, patch, expected, audits)
+	if errors.Is(err, storage.ErrIncidentNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if errors.Is(err, storage.ErrIncidentConflict) {
+		http.Error(w, "If-Match mismatch", http.StatusPreconditionFailed)
+		return
+	}
+	if err != nil {
+		http.Error(w, "ошибка обновления",
+			http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK,
+		incidentToDTO(inc, resolveTrigger(r.Context(), inc, store)))
 }
 
 // buildIncidentPatch строит storage.IncidentPatch и список audit-event'ов.
@@ -451,95 +458,8 @@ func enrichAuditsWithFrom(
 	return audits
 }
 
-// addIncidentNoteHandler — POST /api/incidents/:id/notes.
-func addIncidentNoteHandler(store *storage.Storage) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		role, _ := auth.RoleFromContext(r.Context())
-		canWrite := incidentWriteRoles[role]
-		id := chi.URLParam(r, "id")
-		if !isUUID(id) {
-			http.NotFound(w, r)
-			return
-		}
-		var dto incidentNoteCreateDTO
-		if err := decodeJSON(w, r, &dto); err != nil {
-			http.Error(w, "некорректный JSON", http.StatusBadRequest)
-			return
-		}
-		if len(dto.Content) < 1 || len(dto.Content) > 2000 {
-			http.Error(w, "content: 1..2000 символов",
-				http.StatusBadRequest)
-			return
-		}
-		actorID, err := currentUserID(r, store)
-		if err != nil {
-			http.Error(w, "user not resolved",
-				http.StatusInternalServerError)
-			return
-		}
-		if !canWrite {
-			// assignee может писать заметки.
-			inc, e := store.GetIncident(r.Context(), id)
-			if errors.Is(e, storage.ErrIncidentNotFound) {
-				http.NotFound(w, r)
-				return
-			}
-			if e != nil || inc.AssigneeID == nil || *inc.AssigneeID != actorID {
-				http.Error(w, "forbidden", http.StatusForbidden)
-				return
-			}
-		}
-		note, err := store.AddIncidentNote(r.Context(),
-			storage.IncidentNoteInput{
-				IncidentID: id, AuthorID: actorID, Content: dto.Content,
-			})
-		if errors.Is(err, storage.ErrIncidentNoteTooLong) {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		if err != nil {
-			http.Error(w, "ошибка записи", http.StatusInternalServerError)
-			return
-		}
-		_, _ = store.InsertAuditEvent(r.Context(), storage.AuditEvent{
-			UserID: actorID, EventType: "incident_note_added",
-			Detail: map[string]any{"incident_id": id, "note_id": note.ID},
-		})
-		writeJSON(w, http.StatusCreated, noteToDTO(note))
-	}
-}
-
-func listIncidentNotesHandler(store *storage.Storage) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		role, _ := auth.RoleFromContext(r.Context())
-		if !incidentReadRoles[role] {
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
-		}
-		id := chi.URLParam(r, "id")
-		if !isUUID(id) {
-			http.NotFound(w, r)
-			return
-		}
-		notes, err := store.ListIncidentNotes(r.Context(), id)
-		if err != nil {
-			http.Error(w, "ошибка чтения", http.StatusInternalServerError)
-			return
-		}
-		dtos := make([]incidentNoteDTO, 0, len(notes))
-		for _, n := range notes {
-			dtos = append(dtos, noteToDTO(n))
-		}
-		writeJSON(w, http.StatusOK, incidentNoteListDTO{Notes: dtos})
-	}
-}
-
-func noteToDTO(n storage.IncidentNote) incidentNoteDTO {
-	return incidentNoteDTO{
-		ID: n.ID, IncidentID: n.IncidentID, AuthorID: n.AuthorID,
-		Content: n.Content, CreatedAt: n.CreatedAt,
-	}
-}
+// addIncidentNoteHandler/listIncidentNotesHandler/noteToDTO —
+// вынесены в incidents_notes.go (бюджет файла ≤500 строк).
 
 func validIncidentSeverity(s string) bool {
 	switch s {

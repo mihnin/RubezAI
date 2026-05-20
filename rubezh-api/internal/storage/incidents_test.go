@@ -109,7 +109,7 @@ func TestCreateManualIncidentNeedsReporter(t *testing.T) {
 	inc, _, err := s.CreateManualIncident(ctx,
 		IncidentInput{AuditEventID: &auditID, UserID: &userID,
 			ReporterID: &repID,
-			Severity: "medium", Status: "open", Title: "manual"},
+			Severity:   "medium", Status: "open", Title: "manual"},
 		AuditEvent{UserID: repID, EventType: "incident_created_manual"})
 	if err != nil {
 		t.Fatalf("CreateManualIncident: %v", err)

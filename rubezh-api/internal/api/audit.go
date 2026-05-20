@@ -15,6 +15,8 @@ import (
 	"github.com/rubezh-ai/rubezh-api/internal/storage"
 )
 
+// (json и encoding/json используются в DTO Filters / detail).
+
 // auditAccessRoles — роли, имеющие полный доступ к audit-events.
 // Контракт audit.schema.json + план iteration-9.md §Р3.
 var auditAccessRoles = map[auth.Role]bool{
@@ -54,16 +56,16 @@ func decodeAuditCursor(raw string) (*auditCursor, error) {
 
 // auditEventSummaryDTO — облегчённое представление для list.
 type auditEventSummaryDTO struct {
-	ID              string   `json:"id"`
+	ID              string    `json:"id"`
 	CreatedAt       time.Time `json:"created_at"`
-	UserID          string   `json:"user_id"`
-	EventType       string   `json:"event_type"`
-	ModelProviderID *string  `json:"model_provider_id"`
-	RiskLevel       *string  `json:"risk_level"`
-	RiskClasses     []string `json:"risk_classes"`
-	PolicyDecision  *string  `json:"policy_decision"`
-	RequestID       *string  `json:"request_id"`
-	HasLeak         bool     `json:"has_leak"`
+	UserID          string    `json:"user_id"`
+	EventType       string    `json:"event_type"`
+	ModelProviderID *string   `json:"model_provider_id"`
+	RiskLevel       *string   `json:"risk_level"`
+	RiskClasses     []string  `json:"risk_classes"`
+	PolicyDecision  *string   `json:"policy_decision"`
+	RequestID       *string   `json:"request_id"`
+	HasLeak         bool      `json:"has_leak"`
 }
 
 type auditEventDetailDTO struct {
@@ -297,12 +299,45 @@ func getAuditEventHandler(store *storage.Storage) http.HandlerFunc {
 	}
 }
 
-// exportAuditEventsHandler — POST /api/audit-events/export.
-// Streamed CSV или NDJSON. Перед стримингом пишет audit-event audit_exported.
+// auditExportRequestDTO — тело POST /api/audit-events/export. Filters
+// зеркалят AuditFilter из storage; применяются к экспорту (закрывает
+// MAJOR-1 финального ревью Итерации 9 — раньше filters записывались в
+// audit-event но игнорировались, что было compliance-ловушкой).
 type auditExportRequestDTO struct {
-	Format         string                 `json:"format"`
-	IncludePayload *bool                  `json:"include_payload"`
-	Filters        map[string]json.RawMessage `json:"filters"`
+	Format         string              `json:"format"`
+	IncludePayload *bool               `json:"include_payload"`
+	Filters        *exportFiltersDTO   `json:"filters"`
+}
+
+type exportFiltersDTO struct {
+	From            *time.Time `json:"from"`
+	To              *time.Time `json:"to"`
+	UserID          *string    `json:"user_id"`
+	EventTypes      []string   `json:"event_types"`
+	PolicyDecisions []string   `json:"policy_decisions"`
+	RiskLevels      []string   `json:"risk_levels"`
+	ModelProviderID *string    `json:"model_provider_id"`
+	HasLeak         *bool      `json:"has_leak"`
+	Q               *string    `json:"q"`
+}
+
+// toStorageFilter переводит ExportFiltersDTO в storage.AuditFilter.
+// Limit=200 — MVP-ограничение размера экспорта (без cursor-разбивки).
+func (e *exportFiltersDTO) toStorageFilter() storage.AuditFilter {
+	f := storage.AuditFilter{Limit: 200}
+	if e == nil {
+		return f
+	}
+	f.From = e.From
+	f.To = e.To
+	f.UserID = e.UserID
+	f.EventTypes = e.EventTypes
+	f.PolicyDecisions = e.PolicyDecisions
+	f.RiskLevels = e.RiskLevels
+	f.ModelProviderID = e.ModelProviderID
+	f.HasLeak = e.HasLeak
+	f.Q = e.Q
+	return f
 }
 
 func exportAuditEventsHandler(store *storage.Storage) http.HandlerFunc {
@@ -326,8 +361,10 @@ func exportAuditEventsHandler(store *storage.Storage) http.HandlerFunc {
 		if dto.IncludePayload != nil {
 			includePayload = *dto.IncludePayload
 		}
+		filter := dto.Filters.toStorageFilter()
 
-		// Audit-event перед стримингом.
+		// Audit-event перед стримингом — записывает фактический фильтр,
+		// что устраняет расхождение «записано / применено» (MAJOR-1).
 		userID, _ := currentUserID(r, store)
 		_, _ = store.InsertAuditEvent(r.Context(), storage.AuditEvent{
 			UserID: userID, EventType: "audit_exported",
@@ -338,9 +375,6 @@ func exportAuditEventsHandler(store *storage.Storage) http.HandlerFunc {
 			},
 		})
 
-		// MVP: достаём все строки за раз с дефолтным фильтром (без cursor).
-		// Production-export — streaming с pagination — пост-MVP оптимизация.
-		filter := storage.AuditFilter{Limit: 200}
 		rows, err := store.ListAuditEvents(r.Context(), filter)
 		if err != nil {
 			http.Error(w, "ошибка чтения", http.StatusInternalServerError)
