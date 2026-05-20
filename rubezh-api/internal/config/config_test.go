@@ -1,9 +1,15 @@
 package config
 
-import "testing"
+import (
+	"encoding/base64"
+	"testing"
+)
+
+// validMappingKey — валидный 32-байтовый ключ для тестов (base64).
+const validMappingKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" // 32 нулевых байта
 
 // clearEnv сбрасывает все переменные окружения config и задаёт обязательный
-// AUTH_DEV_TOKEN_SECRET — изолирует тест от внешнего окружения.
+// AUTH_DEV_TOKEN_SECRET + MAPPING_ENCRYPTION_KEY — изолирует тест от внешнего окружения.
 func clearEnv(t *testing.T) {
 	t.Helper()
 	for _, key := range []string{
@@ -14,6 +20,7 @@ func clearEnv(t *testing.T) {
 		t.Setenv(key, "")
 	}
 	t.Setenv("AUTH_DEV_TOKEN_SECRET", "secret")
+	t.Setenv("MAPPING_ENCRYPTION_KEY", validMappingKey)
 }
 
 func TestLoadAppliesDefaults(t *testing.T) {
@@ -58,7 +65,9 @@ func TestLoadRequiresAuthSecret(t *testing.T) {
 	if err == nil {
 		t.Fatal("ожидалась ошибка при отсутствии AUTH_DEV_TOKEN_SECRET")
 	}
-	if cfg != (Config{}) {
+	// Config содержит []byte — сравнение через DeepEqual или ключевые поля.
+	if cfg.AuthSecret != "" || cfg.HTTPPort != "" ||
+		len(cfg.MappingEncryptionKey) != 0 {
 		t.Errorf("при ошибке ожидался нулевой Config, получено %+v", cfg)
 	}
 }
@@ -102,5 +111,53 @@ func TestLoadDatabaseURLPrioritizesExplicit(t *testing.T) {
 	}
 	if cfg.DatabaseURL != "postgres://explicit:dsn@host/db" {
 		t.Errorf("DATABASE_URL не имеет приоритета: %q", cfg.DatabaseURL)
+	}
+}
+
+// TestLoadRequiresMappingKey — пустой MAPPING_ENCRYPTION_KEY → ошибка
+// (план iteration-9.md §Р1: fail-closed на старте без ключа).
+func TestLoadRequiresMappingKey(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("MAPPING_ENCRYPTION_KEY", "")
+	_, err := Load()
+	if err == nil {
+		t.Fatal("ожидалась ошибка при отсутствии MAPPING_ENCRYPTION_KEY")
+	}
+}
+
+// TestLoadRejectsBadMappingKey — невалидный base64 или неправильная длина.
+func TestLoadRejectsBadMappingKey(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+	}{
+		{"не base64", "not-a-base64-!@#$"},
+		{"16 байт (AES-128)", base64.StdEncoding.EncodeToString(make([]byte, 16))},
+		{"24 байта (AES-192)", base64.StdEncoding.EncodeToString(make([]byte, 24))},
+		{"31 байт (короткий)", base64.StdEncoding.EncodeToString(make([]byte, 31))},
+		{"33 байта (длинный)", base64.StdEncoding.EncodeToString(make([]byte, 33))},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			clearEnv(t)
+			t.Setenv("MAPPING_ENCRYPTION_KEY", tc.raw)
+			_, err := Load()
+			if err == nil {
+				t.Errorf("ожидалась ошибка для %q", tc.raw)
+			}
+		})
+	}
+}
+
+// TestLoadDecodesValidMappingKey — валидный ключ декодирован в 32 байта.
+func TestLoadDecodesValidMappingKey(t *testing.T) {
+	clearEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.MappingEncryptionKey) != 32 {
+		t.Errorf("длина ключа = %d, ожидалось 32",
+			len(cfg.MappingEncryptionKey))
 	}
 }

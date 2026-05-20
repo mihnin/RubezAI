@@ -44,11 +44,13 @@ func (f *fakeLLM) Complete(
 }
 
 type fakeStore struct {
-	requestErr     error
-	terminationErr error
-	requests       []storage.ChatRequestRecord
-	terminations   []storage.ChatTerminationRecord
-	audits         []storage.AuditEvent
+	requestErr        error
+	terminationErr    error
+	incidentCreateErr error
+	requests          []storage.ChatRequestRecord
+	terminations      []storage.ChatTerminationRecord
+	audits            []storage.AuditEvent
+	incidents         []storage.IncidentInput
 }
 
 func (f *fakeStore) RecordChatRequest(
@@ -82,6 +84,18 @@ func (f *fakeStore) InsertAuditEvent(
 ) (string, error) {
 	f.audits = append(f.audits, ev)
 	return "ae", nil
+}
+
+func (f *fakeStore) CreateAutoIncident(
+	_ context.Context, inc storage.IncidentInput, ev storage.AuditEvent,
+) (storage.Incident, string, error) {
+	if f.incidentCreateErr != nil {
+		return storage.Incident{}, "", f.incidentCreateErr
+	}
+	f.incidents = append(f.incidents, inc)
+	f.audits = append(f.audits, ev)
+	return storage.Incident{ID: "inc-id", Severity: inc.Severity,
+		Status: inc.Status, Title: inc.Title}, "auto-ae", nil
 }
 
 func (f *fakeStore) auditTypes() []string {
@@ -149,7 +163,7 @@ func TestOrchestratorAllowMasked(t *testing.T) {
 	store := &fakeStore{}
 	sink := &fakeSink{}
 
-	if err := NewOrchestrator(san, lm, store).Handle(
+	if err := NewOrchestrator(san, lm, store, nil).Handle(
 		context.Background(), baseRequest(), sink); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -186,7 +200,7 @@ func TestOrchestratorDeny(t *testing.T) {
 	store := &fakeStore{}
 	sink := &fakeSink{}
 
-	if err := NewOrchestrator(san, lm, store).Handle(
+	if err := NewOrchestrator(san, lm, store, nil).Handle(
 		context.Background(), baseRequest(), sink); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -202,8 +216,15 @@ func TestOrchestratorDeny(t *testing.T) {
 	if sink.doneID != "r-1" {
 		t.Error("done не отправлен")
 	}
-	if got := store.auditTypes(); len(got) != 2 || got[1] != "chat_blocked" {
-		t.Errorf("аудит = %v, ожидалось chat_blocked вторым", got)
+	// После Ф3 Итерации 9: при deny дополнительно создаётся
+	// incident_created_auto (atomic Tx3 в CreateAutoIncident).
+	if got := store.auditTypes(); len(got) != 3 ||
+		got[0] != "chat_request" || got[1] != "chat_blocked" ||
+		got[2] != "incident_created_auto" {
+		t.Errorf("аудит = %v, ожидалось [chat_request chat_blocked incident_created_auto]", got)
+	}
+	if len(store.incidents) != 1 {
+		t.Errorf("ожидался 1 incident, создано %d", len(store.incidents))
 	}
 }
 
@@ -218,7 +239,7 @@ func TestOrchestratorAllowRaw(t *testing.T) {
 
 	req := baseRequest()
 	req.Message = "Какая погода завтра"
-	if err := NewOrchestrator(san, lm, store).Handle(
+	if err := NewOrchestrator(san, lm, store, nil).Handle(
 		context.Background(), req, sink); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -242,7 +263,7 @@ func TestOrchestratorSummaryOnly(t *testing.T) {
 	store := &fakeStore{}
 	sink := &fakeSink{}
 
-	if err := NewOrchestrator(san, lm, store).Handle(
+	if err := NewOrchestrator(san, lm, store, nil).Handle(
 		context.Background(), baseRequest(), sink); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -267,7 +288,7 @@ func TestOrchestratorSanitizerError(t *testing.T) {
 	store := &fakeStore{}
 	sink := &fakeSink{}
 
-	if err := NewOrchestrator(san, lm, store).Handle(
+	if err := NewOrchestrator(san, lm, store, nil).Handle(
 		context.Background(), baseRequest(), sink); err != nil {
 		t.Fatalf("Handle вернул ошибку: %v", err)
 	}
@@ -301,7 +322,7 @@ func TestOrchestratorBadSpan(t *testing.T) {
 	store := &fakeStore{}
 	sink := &fakeSink{}
 
-	if err := NewOrchestrator(san, lm, store).Handle(
+	if err := NewOrchestrator(san, lm, store, nil).Handle(
 		context.Background(), baseRequest(), sink); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -333,7 +354,7 @@ func TestOrchestratorLLMError(t *testing.T) {
 	store := &fakeStore{}
 	sink := &fakeSink{}
 
-	if err := NewOrchestrator(san, lm, store).Handle(
+	if err := NewOrchestrator(san, lm, store, nil).Handle(
 		context.Background(), baseRequest(), sink); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -356,7 +377,7 @@ func TestOrchestratorLeakDetected(t *testing.T) {
 	store := &fakeStore{}
 	sink := &fakeSink{}
 
-	if err := NewOrchestrator(san, lm, store).Handle(
+	if err := NewOrchestrator(san, lm, store, nil).Handle(
 		context.Background(), baseRequest(), sink); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -375,7 +396,7 @@ func TestOrchestratorTerminationError(t *testing.T) {
 	store := &fakeStore{terminationErr: errors.New("сбой БД")}
 	sink := &fakeSink{}
 
-	if err := NewOrchestrator(san, lm, store).Handle(
+	if err := NewOrchestrator(san, lm, store, nil).Handle(
 		context.Background(), baseRequest(), sink); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -439,6 +460,15 @@ func (s *strictCtxStore) InsertAuditEvent(
 	return s.inner.InsertAuditEvent(ctx, ev)
 }
 
+func (s *strictCtxStore) CreateAutoIncident(
+	ctx context.Context, inc storage.IncidentInput, ev storage.AuditEvent,
+) (storage.Incident, string, error) {
+	if err := ctx.Err(); err != nil {
+		return storage.Incident{}, "", err
+	}
+	return s.inner.CreateAutoIncident(ctx, inc, ev)
+}
+
 // TestOrchestratorDetachedTerminationCtx — план §Р6: терминальный аудит
 // пишется context.WithoutCancel; отмена клиентом не должна срывать запись.
 func TestOrchestratorDetachedTerminationCtx(t *testing.T) {
@@ -449,7 +479,7 @@ func TestOrchestratorDetachedTerminationCtx(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // ctx уже отменён — БД отклонила бы запросы на нём
-	if err := NewOrchestrator(san, lm, store).Handle(ctx, baseRequest(), sink); err != nil {
+	if err := NewOrchestrator(san, lm, store, nil).Handle(ctx, baseRequest(), sink); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
 	got := store.inner.auditTypes()
@@ -474,7 +504,7 @@ func TestOrchestratorRejectsOverlappingSpans(t *testing.T) {
 	store := &fakeStore{}
 	sink := &fakeSink{}
 
-	if err := NewOrchestrator(san, lm, store).Handle(
+	if err := NewOrchestrator(san, lm, store, nil).Handle(
 		context.Background(), baseRequest(), sink); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}

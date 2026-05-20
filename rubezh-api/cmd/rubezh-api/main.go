@@ -11,6 +11,7 @@ import (
 
 	"github.com/rubezh-ai/rubezh-api/internal/api"
 	"github.com/rubezh-ai/rubezh-api/internal/config"
+	"github.com/rubezh-ai/rubezh-api/internal/crypto"
 	"github.com/rubezh-ai/rubezh-api/internal/llm"
 	"github.com/rubezh-ai/rubezh-api/internal/storage"
 )
@@ -49,14 +50,22 @@ func main() {
 	llmRouter := buildRouter(providers, cfg.LLMAPIKey)
 	logger.Info("LLM Router инициализирован", "providers", llmRouter.Count())
 
+	mappingCipher, err := crypto.NewCipher(cfg.MappingEncryptionKey)
+	if err != nil {
+		logger.Error("ошибка инициализации AES-GCM для mapping",
+			"error", err)
+		os.Exit(1)
+	}
+
 	srv := &http.Server{
 		Addr: ":" + cfg.HTTPPort,
 		Handler: api.NewRouter(api.Deps{
-			Logger:       logger,
-			Store:        store,
-			AuthSecret:   cfg.AuthSecret,
-			Router:       llmRouter,
-			SanitizerURL: cfg.SanitizerURL,
+			Logger:        logger,
+			Store:         store,
+			AuthSecret:    cfg.AuthSecret,
+			Router:        llmRouter,
+			SanitizerURL:  cfg.SanitizerURL,
+			MappingCipher: mappingCipher,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

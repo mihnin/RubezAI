@@ -11,6 +11,7 @@ import (
 
 	"github.com/rubezh-ai/rubezh-api/internal/auth"
 	"github.com/rubezh-ai/rubezh-api/internal/chat"
+	"github.com/rubezh-ai/rubezh-api/internal/crypto"
 	"github.com/rubezh-ai/rubezh-api/internal/llm"
 	"github.com/rubezh-ai/rubezh-api/internal/sanitizer"
 	"github.com/rubezh-ai/rubezh-api/internal/storage"
@@ -18,18 +19,20 @@ import (
 
 // Deps — зависимости HTTP-слоя.
 type Deps struct {
-	Logger       *slog.Logger
-	Store        *storage.Storage
-	AuthSecret   string
-	Router       *llm.Router // LLM Router; используется /api/chat
-	SanitizerURL string      // базовый URL сервиса rubezh-sanitizer
+	Logger        *slog.Logger
+	Store         *storage.Storage
+	AuthSecret    string
+	Router        *llm.Router    // LLM Router; используется /api/chat
+	SanitizerURL  string         // базовый URL сервиса rubezh-sanitizer
+	MappingCipher *crypto.Cipher // AES-GCM для pseudonym_mappings; nil ⇒ mappings не пишутся (только для тестов)
 }
 
 // NewRouter собирает HTTP-роутер сервиса. Маршруты /api защищены
 // auth-middleware; /health — публичная проба.
 func NewRouter(deps Deps) http.Handler {
 	orchestrator := chat.NewOrchestrator(
-		sanitizer.NewClient(deps.SanitizerURL), deps.Router, deps.Store)
+		sanitizer.NewClient(deps.SanitizerURL), deps.Router, deps.Store,
+		deps.MappingCipher)
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)

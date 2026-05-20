@@ -10,18 +10,24 @@ import (
 )
 
 // requestRecord строит запись Транзакции 1 (chat_request).
+// mappings — зашифрованные псевдонимы (план §Р2), пишутся в Tx1 после
+// sanitization_results. Если cipher не задан — nil, тогда mappings
+// пропускаются (MVP-режим тестов без MAPPING_ENCRYPTION_KEY).
 func (o *Orchestrator) requestRecord(
 	req Request, preview sanitizer.PreviewResponse, outcome policy.Outcome,
+	mappings []storage.PseudonymMappingInput,
 ) storage.ChatRequestRecord {
 	return storage.ChatRequestRecord{
 		SessionID:   req.SessionID,
 		UserContent: preview.SanitizedText,
+		RequestID:   req.RequestID,
 		Sanitization: storage.SanitizationData{
 			RiskLevel:   preview.Risk.Level,
 			RiskScore:   preview.Risk.Score,
 			RiskClasses: preview.Risk.Classes,
 			Entities:    entitiesJSON(preview.Entities),
 		},
+		Mappings: mappings,
 		Audit: o.auditEvent(req, preview, outcome, "chat_request",
 			map[string]any{
 				"request_id":   req.RequestID,
@@ -45,6 +51,7 @@ func (o *Orchestrator) terminationRecord(
 		SessionID:        req.SessionID,
 		AssistantContent: assistantContent,
 		ModelProviderID:  &providerID,
+		RequestID:        req.RequestID,
 		Audit:            o.auditEvent(req, preview, outcome, eventType, detail),
 	}
 }

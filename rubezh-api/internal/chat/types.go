@@ -25,6 +25,10 @@ type Store interface {
 	RecordChatRequest(ctx context.Context, rec storage.ChatRequestRecord) (storage.ChatRequestIDs, error)
 	RecordChatTermination(ctx context.Context, rec storage.ChatTerminationRecord) (storage.ChatTerminationIDs, error)
 	InsertAuditEvent(ctx context.Context, ev storage.AuditEvent) (string, error)
+	// CreateAutoIncident — atomic Tx3 (INSERT incidents + INSERT audit_events).
+	// План iteration-9.md §Р4. Возвращает (incident, auditEventID, err);
+	// при дубликате — storage.ErrIncidentAutoDuplicate.
+	CreateAutoIncident(ctx context.Context, inc storage.IncidentInput, ev storage.AuditEvent) (storage.Incident, string, error)
 }
 
 // EventSink — приёмник SSE-событий потока /api/chat. Fail принимает

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 
@@ -12,12 +13,47 @@ import (
 
 // PseudonymMap — соответствие псевдоним ↔ исходное значение, построенное
 // из исходного текста и спанов сущностей sanitizer.
+//
+// Инвариант «никакого raw в логах» (план iteration-9.md §Р7):
+// PseudonymMap реализует slog.LogValuer; стандартное логирование через
+// `slog.Info("...", "pmap", pmap)` НЕ выводит raw-значения,
+// только агрегат `entries: N + redacted`.
 type PseudonymMap struct {
 	toRaw map[string]string
 }
 
 // Len возвращает число пар в карте.
 func (m PseudonymMap) Len() int { return len(m.toRaw) }
+
+// Raw возвращает raw-значение по псевдониму. Используется оркестратором
+// для построения зашифрованных PseudonymMappingInput (план §Р2).
+// Возвращает пустую строку и false, если псевдонима нет в карте.
+func (m PseudonymMap) Raw(pseudonym string) (string, bool) {
+	raw, ok := m.toRaw[pseudonym]
+	return raw, ok
+}
+
+// LogValue реализует slog.LogValuer. Гарантирует, что raw-значения
+// никогда не попадают в логи: возвращает только агрегированное
+// количество записей + явный маркер redacted.
+func (m PseudonymMap) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.Int("entries", len(m.toRaw)),
+		slog.String("redacted", "raw pseudonym values redacted by design"),
+	)
+}
+
+// MappingAAD вычисляет AAD для AES-GCM шифрования mapping'а
+// (план §Р1, закрытие MINOR-M3 ревью v2). AAD = SHA-256(sessionID || pseudonym),
+// первые 16 байт. Гарантирует уникальность AAD per-mapping —
+// защищает от swap-атак на уровне БД даже внутри одной сессии.
+func MappingAAD(sessionID, pseudonym string) []byte {
+	h := sha256.New()
+	h.Write([]byte(sessionID))
+	h.Write([]byte(pseudonym))
+	sum := h.Sum(nil)
+	return sum[:16]
+}
 
 // BuildPseudonymMap строит карту псевдонимов из исходного текста и сущностей.
 // Спаны индексируют исходный текст по код-поинтам (инвариант контракта
