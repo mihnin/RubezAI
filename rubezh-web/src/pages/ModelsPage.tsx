@@ -1,8 +1,11 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { Cpu, Plus, Key, ShieldCheck, AlertTriangle } from "lucide-react";
 import { apiFetch, apiFetchRaw } from "../api/client";
 import { useAuth } from "../auth/context";
 import { ModelListSchema, type Model } from "../api/schemas";
+import { SkeletonRows } from "../components/Skeleton";
+import { EmptyState } from "../components/EmptyState";
 
 /** ModelsPage (Итерация 15). admin/security_officer пишет; user читает.
  *  Контракт — modelProviderDTO (rubezh-api/internal/api/models.go). */
@@ -19,27 +22,41 @@ export default function ModelsPage() {
   const [showCreate, setShowCreate] = useState(false);
 
   return (
-    <div className="p-6 max-w-4xl">
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-xl font-semibold">LLM-провайдеры</h1>
+    <div className="p-8 max-w-5xl">
+      <header className="flex items-end justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            LLM-провайдеры
+          </h1>
+          <p className="text-sm text-slate-500 mt-1">
+            trusted_local получает raw данные; external — только masked.
+          </p>
+        </div>
         {canWrite && (
           <button
             onClick={() => setShowCreate(true)}
-            className="text-sm px-3 py-1.5 rounded bg-cyan-500 hover:bg-cyan-400 text-slate-950"
+            className="inline-flex items-center gap-1.5 text-sm px-3 py-2 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-medium shadow-lg shadow-cyan-500/20"
           >
-            + Добавить
+            <Plus className="w-4 h-4" strokeWidth={2.5} />
+            Добавить
           </button>
         )}
-      </div>
+      </header>
 
-      {isLoading && <div className="text-slate-500">Загрузка…</div>}
+      {isLoading && <SkeletonRows count={2} className="h-28" />}
 
       <div className="space-y-3">
         {data?.map((m: Model) => (
           <ModelRow key={m.id} model={m} canWrite={canWrite} />
         ))}
         {!isLoading && (data?.length ?? 0) === 0 && (
-          <div className="text-slate-500">Провайдеры не настроены</div>
+          <div className="bg-slate-900/60 border border-slate-800 rounded-xl">
+            <EmptyState
+              icon={Cpu}
+              title="Провайдеры не настроены"
+              hint="Создайте первого провайдера — chat станет доступен сразу (без restart api)."
+            />
+          </div>
         )}
       </div>
 
@@ -75,36 +92,53 @@ function ModelRow({ model, canWrite }: { model: Model; canWrite: boolean }) {
   });
 
   return (
-    <div className="bg-slate-900 border border-slate-700 rounded-lg p-4">
-      <div className="flex items-center justify-between mb-2">
-        <h3 className="font-medium">{model.name}</h3>
-        <div className="flex gap-2">
+    <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-5 hover:border-slate-700 transition">
+      <div className="flex items-start justify-between mb-3 gap-3">
+        <div className="flex items-start gap-3">
+          <div className="w-9 h-9 rounded-lg bg-cyan-500/10 flex items-center justify-center shrink-0">
+            <Cpu className="w-4 h-4 text-cyan-300" strokeWidth={2} />
+          </div>
+          <div>
+            <h3 className="font-medium">{model.name}</h3>
+            <div className="text-xs text-slate-500 mt-0.5 font-mono">
+              {model.adapter}
+            </div>
+          </div>
+        </div>
+        <div className="flex gap-1.5 flex-wrap justify-end">
           <span
-            className={`text-xs px-2 py-0.5 rounded ${
+            className={`text-xs px-2 py-0.5 rounded-full font-medium inline-flex items-center gap-1 ${
               model.trust_level === "trusted_local"
-                ? "bg-emerald-500/20 text-emerald-300"
-                : "bg-slate-700 text-slate-300"
+                ? "bg-emerald-500/15 text-emerald-300"
+                : "bg-slate-800 text-slate-300"
             }`}
           >
+            {model.trust_level === "trusted_local" && (
+              <ShieldCheck className="w-3 h-3" strokeWidth={2.5} />
+            )}
             {model.trust_level}
           </span>
           {model.has_api_key && (
-            <span className="text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-300">
-              api_key set
+            <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 inline-flex items-center gap-1">
+              <Key className="w-3 h-3" strokeWidth={2.5} /> ключ
             </span>
           )}
           {!model.is_enabled && (
-            <span className="text-xs px-2 py-0.5 rounded bg-red-500/20 text-red-300">
-              disabled
+            <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/15 text-red-300 inline-flex items-center gap-1">
+              <AlertTriangle className="w-3 h-3" strokeWidth={2.5} />
+              выключен
             </span>
           )}
         </div>
       </div>
-      <div className="text-sm text-slate-400 space-y-0.5">
-        <div>Adapter: {model.adapter}</div>
-        <div className="truncate">Endpoint: {model.endpoint}</div>
+      <div className="text-sm text-slate-400 space-y-1 ml-12">
+        <div className="font-mono text-xs text-slate-500 truncate">
+          {model.endpoint}
+        </div>
         {model.max_tokens !== null && (
-          <div>max_tokens: {model.max_tokens}</div>
+          <div className="text-xs text-slate-500">
+            max_tokens: {model.max_tokens}
+          </div>
         )}
       </div>
       {canWrite && (

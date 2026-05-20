@@ -1,7 +1,10 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
+import { FileText, Upload, Trash2, FilePlus } from "lucide-react";
 import { apiFetch, apiFetchRaw } from "../api/client";
 import { DocumentListSchema, type Document as DocItem } from "../api/schemas";
+import { SkeletonRows } from "../components/Skeleton";
+import { EmptyState } from "../components/EmptyState";
 
 /** DocumentsPage (Итерация 14). docs/design/ui/documents.md. */
 export default function DocumentsPage() {
@@ -36,100 +39,127 @@ export default function DocumentsPage() {
   });
 
   return (
-    <div className="p-6 max-w-4xl">
-      <h1 className="text-xl font-semibold mb-4">Документы</h1>
-
-      <div className="bg-slate-900 border border-slate-700 rounded-lg p-4 mb-6">
-        <h2 className="text-sm font-medium mb-2">Загрузить документ</h2>
-        <p className="text-xs text-slate-500 mb-3">
-          PDF / DOCX, до 50 МБ. Будет обезличен автоматически.
+    <div className="p-8 max-w-5xl">
+      <header className="mb-6">
+        <h1 className="text-2xl font-semibold tracking-tight">Документы</h1>
+        <p className="text-sm text-slate-500 mt-1">
+          PDF / DOCX обезличиваются автоматически перед индексацией.
         </p>
-        <div className="flex gap-2">
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".pdf,.docx"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) uploadMut.mutate(f);
-            }}
-            disabled={uploadMut.isPending}
-            className="flex-1 text-sm file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:bg-cyan-500 file:text-slate-950"
+      </header>
+
+      <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-5 mb-6">
+        <div className="flex items-start gap-3">
+          <div className="w-9 h-9 rounded-lg bg-cyan-500/15 flex items-center justify-center shrink-0">
+            <Upload
+              className="w-4 h-4 text-cyan-300"
+              strokeWidth={2}
+            />
+          </div>
+          <div className="flex-1">
+            <div className="text-sm font-medium mb-1">Загрузить документ</div>
+            <p className="text-xs text-slate-500 mb-3">
+              PDF / DOCX, до 50&nbsp;МБ. ПДн и секреты будут замаскированы.
+            </p>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".pdf,.docx"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) uploadMut.mutate(f);
+              }}
+              disabled={uploadMut.isPending}
+              className="text-sm text-slate-300 file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:bg-cyan-500 file:text-slate-950 file:font-medium file:cursor-pointer hover:file:bg-cyan-400"
+            />
+            {uploadError && (
+              <div className="mt-2 text-sm text-red-300">{uploadError}</div>
+            )}
+            {uploadMut.isPending && (
+              <div className="mt-2 text-sm text-cyan-300">Загрузка…</div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {isLoading ? (
+        <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-4">
+          <SkeletonRows count={4} />
+        </div>
+      ) : (data?.documents?.length ?? 0) === 0 ? (
+        <div className="bg-slate-900/60 border border-slate-800 rounded-xl">
+          <EmptyState
+            icon={FilePlus}
+            title="Документов пока нет"
+            hint="Загрузите PDF или DOCX — он будет проиндексирован и доступен для RAG-поиска."
           />
         </div>
-        {uploadError && (
-          <div className="mt-2 text-sm text-red-300">{uploadError}</div>
-        )}
-        {uploadMut.isPending && (
-          <div className="mt-2 text-sm text-cyan-300">Загрузка…</div>
-        )}
-      </div>
-
-      <div className="bg-slate-900 border border-slate-700 rounded-lg overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-800 text-slate-400 text-xs uppercase">
-            <tr>
-              <th className="p-3 text-left">Имя</th>
-              <th className="p-3 text-left">Статус</th>
-              <th className="p-3 text-right">Размер</th>
-              <th className="p-3"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {isLoading && (
+      ) : (
+        <div className="bg-slate-900/60 border border-slate-800 rounded-xl overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-900 text-slate-400 text-xs uppercase tracking-wider">
               <tr>
-                <td colSpan={4} className="p-6 text-center text-slate-500">
-                  Загрузка…
-                </td>
+                <th className="p-3 text-left font-medium">Имя</th>
+                <th className="p-3 text-left font-medium">Статус</th>
+                <th className="p-3 text-right font-medium">Размер</th>
+                <th className="p-3"></th>
               </tr>
-            )}
-            {!isLoading && (data?.documents?.length ?? 0) === 0 && (
-              <tr>
-                <td colSpan={4} className="p-6 text-center text-slate-500">
-                  Документов пока нет
-                </td>
-              </tr>
-            )}
-            {data?.documents?.map((d: DocItem) => (
-              <tr key={d.id} className="border-t border-slate-800">
-                <td className="p-3 truncate max-w-xs">{d.filename}</td>
-                <td className="p-3">
-                  <StatusBadge status={d.status} />
-                </td>
-                <td className="p-3 text-right text-slate-400">
-                  {d.size_bytes !== null
-                    ? `${(d.size_bytes / 1024).toFixed(1)} KB`
-                    : "—"}
-                </td>
-                <td className="p-3 text-right">
-                  <button
-                    onClick={() => {
-                      if (confirm(`Удалить ${d.filename}?`))
-                        delMut.mutate(d.id);
-                    }}
-                    className="text-red-400 hover:text-red-300 text-xs"
-                  >
-                    Удалить
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {data?.documents?.map((d: DocItem) => (
+                <tr
+                  key={d.id}
+                  className="border-t border-slate-800 hover:bg-slate-800/30"
+                >
+                  <td className="p-3 truncate max-w-xs">
+                    <span className="inline-flex items-center gap-2">
+                      <FileText
+                        className="w-3.5 h-3.5 text-slate-500 shrink-0"
+                        strokeWidth={2}
+                      />
+                      {d.filename}
+                    </span>
+                  </td>
+                  <td className="p-3">
+                    <StatusBadge status={d.status} />
+                  </td>
+                  <td className="p-3 text-right text-slate-400 tabular-nums">
+                    {d.size_bytes !== null
+                      ? `${(d.size_bytes / 1024).toFixed(1)} KB`
+                      : "—"}
+                  </td>
+                  <td className="p-3 text-right">
+                    <button
+                      onClick={() => {
+                        if (confirm(`Удалить ${d.filename}?`))
+                          delMut.mutate(d.id);
+                      }}
+                      title="Удалить"
+                      className="inline-flex items-center justify-center w-7 h-7 rounded text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" strokeWidth={2} />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const map: Record<string, string> = {
-    pending: "bg-slate-700 text-slate-300",
-    processing: "bg-cyan-500/20 text-cyan-300",
-    done: "bg-emerald-500/20 text-emerald-300",
-    failed: "bg-red-500/20 text-red-300",
+  const map: Record<string, { cls: string; label: string }> = {
+    pending: { cls: "bg-slate-700/50 text-slate-300", label: "ожидает" },
+    processing: { cls: "bg-cyan-500/20 text-cyan-300 animate-pulse", label: "обработка" },
+    done: { cls: "bg-emerald-500/20 text-emerald-300", label: "готов" },
+    failed: { cls: "bg-red-500/20 text-red-300", label: "ошибка" },
   };
-  const cls = map[status] ?? "bg-slate-700 text-slate-300";
+  const m = map[status] ?? { cls: "bg-slate-700/50 text-slate-300", label: status };
   return (
-    <span className={`px-2 py-0.5 rounded text-xs ${cls}`}>{status}</span>
+    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${m.cls}`}>
+      {m.label}
+    </span>
   );
 }

@@ -73,13 +73,35 @@ docker compose ps
 
 1. Открыть http://localhost:5173 → выбрать роль `user` → войти.
 2. **Чат** → отправить «Меня зовут Иван Иванов, мой телефон +79001234567» →
-   увидеть SSE-стрим ответа + предупреждение «Решение: allow_masked» +
-   количество обезличенных сущностей.
-3. **Документы** → загрузить PDF/DOCX → дождаться `status=done`.
-4. **Аудит** → проверить события `chat_request_received`,
-   `chat_response_completed`, `document_uploaded` без raw-данных.
-5. **Инциденты** — если отправляли запрос с правилом deny, увидеть
-   `auto`-инцидент со ссылкой на `audit_event_id`.
+   увидеть SSE-стрим ответа + плашку решения и количество обезличенных сущностей.
+3. **Документы** → загрузить PDF/DOCX → дождаться `status=готов`.
+4. **Аудит** → видны события `chat_request`, `chat_response`,
+   `document_uploaded` без raw-данных пользователей.
+5. **Инциденты** — при утечке или deny создаётся `auto`-инцидент со ссылкой
+   на `audit_event_id`; терминальный переход требует `resolution`.
+
+### Подключение локальной LLM (LM Studio / Ollama / vLLM)
+
+«Рубеж ИИ» поддерживает любые OpenAI-совместимые endpoint'ы. Пример с
+**LM Studio + DeepSeek-R1-Distill-Qwen-7B**:
+
+1. Запустить LM Studio → загрузить модель → включить server на `:1234`.
+2. Открыть **Web UI → Модели → Добавить**:
+   - Имя: `deepseek-local`
+   - Trust level: **trusted_local** (LLM получит raw данные — оправдано
+     для модели внутри периметра)
+   - Adapter: `openai_compatible`
+   - Endpoint: `http://host.docker.internal:1234/v1`
+     *(Windows/Mac Docker Desktop; на Linux — IP хоста)*
+   - API key: пустой (LM Studio не требует)
+3. В разделе **Чат** в правом верхнем углу — picker провайдеров.
+   Раскройте → в поле «Модель» впишите имя загруженной модели
+   (например `deepseek-r1-distill-qwen-7b`). Выбор сохраняется в
+   localStorage.
+4. Hot-reload Router — новая модель доступна **без restart api**.
+
+Для **внешних API** (OpenAI/Anthropic/Yandex GPT) — `trust_level: external`
+и API key через UI или env. Внешние модели получают только **masked** текст.
 
 ## Статус проекта
 

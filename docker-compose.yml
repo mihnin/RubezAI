@@ -166,7 +166,9 @@ services:
       rubezh-api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--spider", "http://localhost/"]
+      # 127.0.0.1 (а не localhost): wget внутри alpine пробует IPv6 первым,
+      # nginx по умолчанию слушает только IPv4 — было причиной unhealthy.
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1/"]
       interval: 10s
       timeout: 5s
       retries: 6

@@ -1,7 +1,10 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { AlertTriangle, Bot, User, Clock } from "lucide-react";
 import { apiFetch, apiFetchRaw } from "../api/client";
 import { IncidentListSchema, type Incident } from "../api/schemas";
+import { SkeletonRows } from "../components/Skeleton";
+import { EmptyState } from "../components/EmptyState";
 
 const SEVERITY_COLOR: Record<string, string> = {
   low: "bg-slate-700 text-slate-300",
@@ -40,14 +43,20 @@ export default function IncidentsPage() {
   });
 
   return (
-    <div className="p-6">
-      <h1 className="text-xl font-semibold mb-4">Инциденты</h1>
-      <div className="mb-4 flex gap-2 text-sm">
+    <div className="p-8">
+      <header className="mb-6">
+        <h1 className="text-2xl font-semibold tracking-tight">Инциденты</h1>
+        <p className="text-sm text-slate-500 mt-1">
+          Auto — создан системой при утечке или deny; manual — заведён вручную ИБ-офицером.
+        </p>
+      </header>
+
+      <div className="mb-4 flex gap-3 text-sm items-center">
         <label className="text-slate-400">Статус:</label>
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
-          className="bg-slate-800 border border-slate-700 rounded px-2 py-1"
+          className="bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 focus:outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20"
         >
           <option value="">все</option>
           <option value="open">open</option>
@@ -57,10 +66,10 @@ export default function IncidentsPage() {
         </select>
       </div>
 
-      <div className="space-y-2">
-        {isLoading && <div className="text-slate-500">Загрузка…</div>}
+      <div className="space-y-3">
+        {isLoading && <SkeletonRows count={3} className="h-32" />}
         {error && (
-          <div role="alert" className="text-sm text-red-300">
+          <div role="alert" className="text-sm text-red-300 bg-red-900/20 border border-red-800/50 rounded-lg px-3 py-2">
             {(error as Error).message}
           </div>
         )}
@@ -68,7 +77,13 @@ export default function IncidentsPage() {
           <IncidentCard key={i.id} inc={i} />
         ))}
         {!isLoading && (data?.incidents?.length ?? 0) === 0 && (
-          <div className="text-slate-500">Инцидентов нет</div>
+          <div className="bg-slate-900/60 border border-slate-800 rounded-xl">
+            <EmptyState
+              icon={AlertTriangle}
+              title="Инцидентов нет"
+              hint="Хорошие новости — нарушений политики не зафиксировано."
+            />
+          </div>
         )}
       </div>
     </div>
@@ -105,36 +120,49 @@ function IncidentCard({ inc }: { inc: Incident }) {
   const nextStatuses = STATUS_NEXT[inc.status] ?? [];
 
   return (
-    <div className="bg-slate-900 border border-slate-700 rounded-lg p-4">
+    <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-5 hover:border-slate-700 transition">
       <div className="flex items-start justify-between mb-2 gap-3">
         <div className="flex-1">
-          <h3 className="font-medium">{inc.title}</h3>
+          <h3 className="font-medium flex items-center gap-2">
+            {inc.reporter_id === null ? (
+              <Bot
+                className="w-4 h-4 text-amber-400"
+                strokeWidth={2}
+                aria-label="auto"
+              />
+            ) : (
+              <User className="w-4 h-4 text-slate-500" strokeWidth={2} />
+            )}
+            {inc.title}
+          </h3>
           {inc.summary && (
-            <p className="text-sm text-slate-400 mt-1">{inc.summary}</p>
+            <p className="text-sm text-slate-400 mt-1.5 ml-6">{inc.summary}</p>
           )}
           {inc.resolution && (
-            <p className="mt-2 text-xs text-emerald-300 italic">
+            <p className="mt-2 ml-6 text-xs text-emerald-300 italic">
               Решение: {inc.resolution}
             </p>
           )}
         </div>
-        <div className="flex flex-col items-end gap-1">
+        <div className="flex flex-col items-end gap-1.5 shrink-0">
           <span
-            className={`text-xs px-2 py-0.5 rounded ${SEVERITY_COLOR[inc.severity] ?? "bg-slate-700"}`}
+            className={`text-xs px-2.5 py-0.5 rounded-full font-medium ${SEVERITY_COLOR[inc.severity] ?? "bg-slate-700"}`}
           >
             {inc.severity}
           </span>
-          <span className="text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-300">
+          <span className="text-xs px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-300">
             {STATUS_LABEL[inc.status] ?? inc.status}
           </span>
         </div>
       </div>
-      <div className="text-xs text-slate-500 flex gap-4 mt-2">
-        {inc.trigger && <span>trigger: {inc.trigger}</span>}
-        <span>{new Date(inc.created_at).toLocaleString("ru-RU")}</span>
-        {inc.reporter_id === null && (
-          <span className="text-amber-400">auto</span>
+      <div className="text-xs text-slate-500 flex gap-3 mt-3 ml-6">
+        {inc.trigger && (
+          <span className="font-mono">{inc.trigger}</span>
         )}
+        <span className="inline-flex items-center gap-1">
+          <Clock className="w-3 h-3" strokeWidth={2} />
+          {new Date(inc.created_at).toLocaleString("ru-RU")}
+        </span>
       </div>
       {err && (
         <div className="mt-2 text-xs text-red-300" role="alert">
