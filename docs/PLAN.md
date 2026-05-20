@@ -292,6 +292,12 @@
 - ~~m10 audit-log compliance_officer/auditor filter rules~~ → `ui/audit-log.md`.
 - ~~m11 год в audit-log tooltip~~ → `ui/audit-log.md`.
 - ~~m12 aria-live single-source-of-truth~~ → `ui-system.md §9`.
+- ~~m13 ui/models.md отстаёт от Итерации 9.5 (403/2-фазный/key-broken)~~ →
+  `ui/models.md`: добавлены §«Индикатор состояния ключа» (chip danger
+  для broken-key), §«2-фазное создание провайдера с ключом» (warning-
+  toast + «Перешифровать api-key» в меню), 3 новых State (403,
+  key-encrypt-failed, key-broken). После Итерации 9.5 backend RBAC
+  и fail-closed теперь имеют UX-отражение.
 
 Новые пункты добавляются сюда по мере появления из ревью.
 

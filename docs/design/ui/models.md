@@ -83,7 +83,19 @@ UX-spec. Использует существующее API из Итерации
     - `trusted_local` — `success` (olive).
   - **Состояние** — chip `●вкл` (success) / `○выкл` (muted).
   - Действия (3-точечное меню): Test connection, Edit (name +
-    default model), Toggle on/off, Delete.
+    default model), Toggle on/off, **Перешифровать api-key**
+    (видимо если `has_api_key=false` или `key_status=broken`),
+    Delete.
+- **Индикатор состояния ключа** (m13 ревью этапа A, после Итерации 9.5):
+  - `has_api_key: true` + provider реагирует — нет специальной отметки.
+  - `has_api_key: true` + Decrypt fail на сервере — chip `danger` с
+    иконкой «🔐⚠» и tooltip «Ключ повреждён (вероятно изменён
+    MAPPING_ENCRYPTION_KEY). Запросы заблокированы — провайдер
+    пропускается в LLM-router (fail-closed). Перешифруйте через
+    меню → «Перешифровать api-key».»
+  - `has_api_key: false` — chip `text-muted` с иконкой «🔓» (нет
+    ключа в БД, используется env-fallback `LLM_API_KEY`,
+    deprecated).
 - Hover row → expand второй строкой `base_url` (mono, обрезан до 60
   chars + tooltip).
 
@@ -98,6 +110,26 @@ UX-spec. Использует существующее API из Итерации
 - Toggle «Показать ключ» (`eye` icon).
 - При сохранении — `POST /api/models`; на 409 — toast «Имя уже
   занято».
+
+### 2-фазное создание провайдера с ключом (m13 ревью этапа A)
+
+Backend Итерация 9.5 делает create в 2 этапа: INSERT записи провайдера
+→ возврат `id` → шифрование `api_key` с AAD=id → UPDATE
+`api_key_encrypted`. Если этап 2 (шифрование/UPDATE) падает после
+успешного INSERT, провайдер существует в БД с `has_api_key=false`.
+
+UX-обработка:
+
+- HTTP `201 Created` означает «провайдер создан и ключ зашифрован
+  (или ключа не было)». В DTO смотрим `has_api_key`.
+- HTTP `500 Internal Server Error` после Add-диалога **с непустым
+  api_key** означает «провайдер создан, ключ НЕ зашифрован».
+  Toast `warning`: «Провайдер `<name>` создан, но шифрование ключа
+  не удалось. Откройте 3-точечное меню → «Перешифровать api-key» —
+  и установите ключ повторно.»
+- Кнопка «Перешифровать api-key» в 3-точечном меню (видима всегда
+  для admin/developer) открывает диалог с одним полем `api_key`
+  (новый plaintext); шлёт `POST /api/models/:id/api-key`.
 
 ### Подсказка про trusted_local
 
@@ -116,6 +148,9 @@ UX-spec. Использует существующее API из Итерации
 | Loading | Skeleton-таблица |
 | Validation error в Add | Inline-ошибки полей |
 | Duplicate name | Toast `danger`: «Провайдер с таким именем уже существует» |
+| **403 Forbidden** | Toast `danger` с `request_id` (mono, копируется): «Недостаточно прав для управления провайдерами (требуется admin или developer)». Add-кнопка скрыта/disabled для не-админских ролей. Backend RBAC из Итерации 9.5 (modelWriteRoles). |
+| **Key encrypt failed после Add** | См. §«2-фазное создание»: warning-toast с инструкцией повторить через меню «Перешифровать api-key» |
+| **Key broken (decrypt fail)** | В таблице — chip `danger` 🔐⚠ + tooltip с подсказкой перешифровать (см. §«Индикатор состояния ключа») |
 | Test connection running | Spinner в строке, текст «Проверка…» |
 | Test connection ok | Toast `success`: «Соединение установлено» |
 | Test connection fail | Toast `danger`: «Не удалось подключиться: <msg>», `request_id` |
