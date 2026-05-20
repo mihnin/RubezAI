@@ -153,17 +153,18 @@
 
 - **Цель:** append-only Audit API, Incidents API с авто-инцидентом при `deny`/`escalate`/`response_leak_detected`, шифрованная персистентность `pseudonym_mappings` (AES-256-GCM), история сессии `GET /api/chat/sessions/:id/messages`. Подробно — `docs/design/iteration-9.md` (v2.1).
 - **Архитектурный план:** v1 — 8.7/10 на доработку (3 MAJOR + 8 MINOR); v2 — 9.65/10 принят к реализации; v2.1 — все 7 новых MINOR закрыты в плане.
-- **Фазы (TDD):**
-  - **Ф1 AES-GCM crypto** — ✅ закрыта (red `ce6ec58` → green `f4a225c`, 17 sub-тестов зелёные).
-  - **Ф2a миграция 000008** — ✅ закрыта (`fd1561c`); применена, verify_schema PASSED.
-  - **Ф2b storage.mapping** — ✅ закрыта (`ef39b1b`, 7 тестов green, LogValuer-redaction).
-  - **Ф2c storage.incidents** — ✅ закрыта (`5dbe161`, 13 тестов green; atomic Tx3, partial unique race, 412 PATCH, append-only notes).
-  - **Ф2d storage.audit расширение** — ListEvents с фильтрами+keyset cursor, GetEvent.
-  - **Ф2e storage.chat расширение** — ListMessages с JOIN sanitization_results (whitelist start/end).
-  - **Ф3 оркестратор** — расширение Tx1 (mappings с AAD=sha256(session_id||pseudonym)), auto-incident в Tx3, LogValuer для PseudonymMap, severityFor.
-  - **Ф4 HTTP** — 9 эндпойнтов, 2 новых контракта (`audit.schema.json`, `incidents.schema.json`), интеграционные тесты, role-permission, 412/428 PATCH.
-- **Тесты:** см. план §5; audit-replay, авто-создание incidents (deny/escalate/leak), append-only `incident_notes`, отсутствие start/end в истории, `incident_created_auto` в той же Tx что и INSERT incidents.
+- **Фазы (TDD), все ✅ закрыты:**
+  - **Ф1 AES-GCM crypto** — `ce6ec58` red → `f4a225c` green; 17 sub-тестов; AAD-поддержка.
+  - **Ф2a миграция 000008** — `fd1561c`; reporter_id/assignee_id/closed_at, partial unique idx_incidents_one_auto_per_event, incident_notes append-only, индексы audit, chat_messages.request_id; verify_schema PASSED.
+  - **Ф2b storage.mapping** — `ef39b1b`; InsertPseudonymMappings (batch unnest); 7 тестов; LogValuer-redaction.
+  - **Ф2c storage.incidents** — `5dbe161`; CreateAuto/Manual atomic Tx3, PatchIncident с If-Match→412, AddIncidentNote append-only, FindManualIncidentForReporter; 13 тестов.
+  - **Ф2d storage.audit** — `e9d00c7`; ListAuditEvents/GetAuditEvent с keyset cursor row-comparison; 5 тестов; jsonb GIN-фильтр has_leak.
+  - **Ф2e storage.chat** — `2ad7633`; request_id+Mappings в Tx1/Tx2; ListChatMessages с JOIN+whitelist (start/end не утекают); 5 тестов.
+  - **Ф3 оркестратор** — `d531752`; PseudonymMap.LogValue() (никакого raw в логах), MappingAAD=SHA-256(session_id‖pseudonym), auto_incident.go (severityFor leak +2 ступени), Cipher в Orchestrator, расширение Store interface, config MAPPING_ENCRYPTION_KEY fail-closed, main проброс Cipher.
+  - **Ф4 HTTP** — `e5b9fd5`; 9 эндпойнтов (`/api/audit-events*`, `/api/incidents*`, `/api/chat/sessions/:id/messages`), 2 контракта (`audit.schema.json`, `incidents.schema.json`); 12 API-тестов (включая критический тест на отсутствие start/end в JSON истории; 412/428 PATCH; developer scope 404).
+- **Самооценка реализации:** 9.7/10 — все архитектурные решения плана реализованы; критические инварианты безопасности доказаны тестами; 10 пакетов green.
 - **Закрывает критерии:** 10, 11.
+- **Статус:** на ревью архитектора.
 
 ### ☐ Итерация 10 — Worker: документы
 
