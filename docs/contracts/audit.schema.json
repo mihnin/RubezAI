@@ -34,7 +34,8 @@
         "document_processing_failed",
         "document_downloaded",
         "document_deleted",
-        "document_retry_requested"
+        "document_retry_requested",
+        "search_performed"
       ]
     },
     "AuditRiskLevel": {

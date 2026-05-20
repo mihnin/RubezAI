@@ -85,6 +85,9 @@ func NewRouter(deps Deps) (http.Handler, *chat.Orchestrator) {
 			deleteDocumentHandler(deps.Store, deps.Minio))
 		api.Post("/documents/{id}/retry",
 			retryDocumentHandler(deps.Store))
+		// RAG поиск — Итерация 11.
+		api.Post("/search", searchHandler(deps.Store,
+			sanitizer.NewClient(deps.SanitizerURL)))
 	})
 	return r, orchestrator
 }
