@@ -153,7 +153,15 @@ semantic.
 | accent on bg-base | ≈ 5.5:1 | AA для обычного |
 | focus-ring on bg-elev-2 | ≈ 4.7:1 | AA для UI |
 
-Проверка автоматизируется (см. §10).
+**Проверка автоматизируется** (m3 ревью этапа A):
+- **axe-core** в Vitest unit-тестах layout-компонентов (catches AA
+  violations build-time);
+- **Lighthouse accessibility audit** в CI GitHub Actions
+  (a11y-score ≥ 95);
+- **Figma plugin Stark/Contrast** на этапе дизайна — все цвета
+  semantic-уровня проверены до коммита в ui-system.md;
+- расчёты выше (§2.7) — sanity-check для ручной перепроверки.
+Любой AA-промах валит сборку (см. §9 accessibility-инварианты).
 
 ## 3. Типографика
 
@@ -341,9 +349,16 @@ sticky для error.
 - **Skeleton shimmer:** 1.4s linear infinite.
 - **Toast enter/exit:** translate-y 8px + opacity 0→1, 200ms.
 - **Drawer slide:** translate-x 16px + opacity 0→1, 240ms ease-out.
+- **SSE keep-alive** в чате (m1 ревью этапа A): браузер EventSource
+  игнорирует комментарии `: ping`, но они держат соединение живым
+  через reverse-proxy. Не визуальный эффект, но часть motion-системы
+  (предотвращение «обрыва без причины»).
 
-`prefers-reduced-motion: reduce` отключает все анимации длиннее
-`dur-base` (skeleton остаётся как 1-кадровый opacity-fade).
+`prefers-reduced-motion: reduce` (m9 ревью этапа A) **полностью
+отключает** все бесконечные анимации (skeleton shimmer, typing-cursor):
+вместо shimmer — статический `bg-elev-2`; вместо мигающего cursor —
+статичный `▌`. Анимации длиннее `dur-base` (drawer, dialog scale) —
+сокращаются до `dur-fast` или отключаются полностью.
 
 ## 8. Состояния focus / hover / active
 
@@ -355,15 +370,22 @@ sticky для error.
 
 ## 9. Accessibility инварианты
 
+Это **единственный источник правды** для a11y-правил всего проекта
+(m12 ревью этапа A). UX-spec экранов (`docs/design/ui/*.md`) могут
+**ссылаться** на этот раздел, но **не должны переопределять**
+эти правила — иначе возникает дрейф между документами.
+
 1. Контраст текста ≥4.5:1 на всех фонах.
 2. Контраст UI / focus-ring ≥3:1.
 3. Focus-ring видим и не скрыт под sticky-header (SC 2.4.11).
 4. Минимальный hit-target 36×36 (44 если основной для роли user).
 5. ARIA-метки на все icon-only кнопки.
-6. `aria-live="polite"` на streaming-сообщение ассистента.
-7. `aria-live="assertive"` на error-toast и deny-banner.
+6. **`aria-live="polite"`** — на streaming-сообщение ассистента в чате
+   и на любое лениво-обновляемое содержимое (drawer-обновление, etc.).
+7. **`aria-live="assertive"`** — на error-toast, deny-banner,
+   422/429-banner логина — то, что требует немедленного внимания.
 8. Keyboard: Tab order по DOM, Esc закрывает Dialog/Drawer/Toast.
-9. `prefers-reduced-motion` уважается.
+9. `prefers-reduced-motion` уважается (см. §7).
 10. Все формы — `<label for="...">`, не placeholder вместо label.
 
 Автотесты:

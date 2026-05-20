@@ -230,6 +230,30 @@
   записи `model_providers` (не отдаётся в DTO) — вместе с переходом на OIDC.
   Запланировано после MVP.
 
+**3 косметических MINOR из 3-го ревью Итерации 9 (закрыты `30c462b`):**
+
+- ~~Двойная пустая строка в `audit.go:17-18`~~ → убрана.
+- ~~`TestChatEndpointFullFlow` без `orch.Wait()` в `t.Cleanup`~~ →
+  `t.Cleanup(orch.Wait)` добавлен.
+- ~~`TestExportAuditEventsCSV` не проверяет marker в CSV~~ →
+  `seedAuditWithMarker` пишет marker в `masked_payload`; тест
+  проверяет наличие marker и id seed-события в CSV-body.
+
+**12 MINOR из 1-го ревью этапа A (m1-m12, закрыты):**
+
+- ~~m1 SSE keep-alive `: ping`~~ → `ui-trends-2026.md §6`, `ui-system.md §7`.
+- ~~m2 login states (rate-limit 429, no-roles-seeded)~~ → уже в `ui/login.md`.
+- ~~m3 axe-core / Lighthouse в §2.7~~ → `ui-system.md §2.7`.
+- ~~m4 documents polling back-off~~ → `ui/documents.md` (exp back-off).
+- ~~m5 audit-log event_type enum из контракта~~ → `ui/audit-log.md`.
+- ~~m6 incidents polling без push~~ → `THREAT_MODEL §7 #6`.
+- ~~m7 policies sanitize note~~ → `ui/policies.md` (raw_classes derived).
+- ~~m8 chat preview-диалог states~~ → уже в `ui/chat.md`.
+- ~~m9 skeleton reduced-motion~~ → `ui-system.md §7`.
+- ~~m10 audit-log compliance_officer/auditor filter rules~~ → `ui/audit-log.md`.
+- ~~m11 год в audit-log tooltip~~ → `ui/audit-log.md`.
+- ~~m12 aria-live single-source-of-truth~~ → `ui-system.md §9`.
+
 Новые пункты добавляются сюда по мере появления из ревью.
 
 ## История ревью архитектора

@@ -91,8 +91,13 @@ rule-builder — пост-MVP.
 
 1. На монтировании — `GET /api/policies` → отрисовать список.
 2. На «Проверить» — собрать `{text, model_trust, user_role,
-   context}` → `POST /api/policies/test` (внутри: sanitize → policy
-   engine → ответ).
+   context}` → `POST /api/policies/test`. **Внутри handler'а** делается
+   `sanitize` входного текста (вычисление risk_classes и entity_types
+   из ПДн-детекторов), затем результат подаётся в `policy.DefaultPolicy().
+   Decide(input)`. Это объясняет, почему `risk_classes` и
+   `entity_types` появляются в результате — пользователь их не
+   передавал явно (m7 ревью этапа A). Тест **пишет audit-event**
+   `policy_tested` — каждый тест аудитируется.
 3. Результат — `PolicyDecision` + `Risk` + (опционально) `entities`.
 
 ## Безопасность

@@ -67,11 +67,23 @@ developer (свои tests).
 - Sticky под badge'ом. Группы фильтров:
   - **Период**: pre-set («Сегодня», «Сутки», «Неделя», «Месяц») +
     custom date range picker.
-  - **Роль / пользователь**: multi-select (для admin'а — все
-    пользователи; для auditor — только роль).
-  - **Тип события**: multi-select (`chat_request`, `chat_response`,
-    `chat_blocked`, `chat_error`, `policy_tested`, `model_*`,
-    `incident_*`, `document_*`).
+  - **Роль / пользователь**: multi-select.
+    - `admin` / `security_officer` — все пользователи всех ролей;
+    - `compliance_officer` — все пользователи всех ролей **кроме**
+      developer-scoped событий (`policy_tested` чужих developer'ов),
+      так как compliance-домен не требует доступа к dev-тестам
+      политики;
+    - `auditor` — все пользователи всех ролей (read-only access
+      ко всем audit-событиям, m10 ревью этапа A);
+    - `developer` — только `policy_tested` собственного user_id
+      (хардфильтр на сервере, см. план iteration-9 §Р3).
+  - **Тип события**: multi-select. Список значений берётся **из
+    контракта** `docs/contracts/audit.schema.json#AuditEventType`
+    (закрытый enum, 20 значений MVP на момент Итерации 9, открыт
+    к расширению). Frontend получает enum через Zod-схему,
+    автоматически синхронизируется с бэкендом (m5 ревью этапа A).
+    Незнакомые типы (если бэк отдал значение вне enum'а) рендерятся
+    как обобщённый chip `text-muted` — fallback на forward-compat.
   - **Решение**: multi-select (`allow_raw`...`escalate`, `—`).
   - **Провайдер**: multi-select.
   - **С флагом утечки**: toggle (boolean, фильтр `detail.response_leak_detected = true`).
@@ -81,7 +93,9 @@ developer (свои tests).
 ### Виртуализованная таблица
 
 - Колонки (по умолчанию):
-  - **Время** (UTC + relative, tooltip UTC ISO);
+  - **Время** (UTC + relative; tooltip — полный `ru-RU` формат **с годом**:
+    «20 мая 2026, 14:32:41 UTC+3» — m11 ревью этапа A: год обязателен
+    для долгосрочного аудит-анализа);
   - **Событие** (chip с типом);
   - **Пользователь** (имя + chip роли);
   - **Решение** (chip);

@@ -119,8 +119,11 @@ pgvector.
 
 1. Drop → `POST /api/documents` (multipart). Возвращает `document_id`,
    статус `queued`.
-2. Worker обрабатывает → push-обновление через polling каждые 2s
-   (MVP; SSE — пост-MVP).
+2. Worker обрабатывает → polling каждые 2s **с exponential back-off**
+   (m4 ревью этапа A): `interval = min(8000ms, 2000 * 2^retries)`,
+   где `retries` инкрементируется при отсутствии изменений статуса.
+   Сбрасывается при любом изменении. Защита от лавины на 100+
+   документах. SSE-push — пост-MVP.
 3. Detail-страница — `GET /api/documents/:id` + `GET
    /api/documents/:id/chunks`.
 

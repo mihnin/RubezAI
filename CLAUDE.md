@@ -173,10 +173,10 @@ deny/escalate/leak):
   → `orchestrator.Wait()` — фоновые auto-incident-горутины
   обязательно завершаются (compliance-полнота audit-trail).
 
-Открытый техдолг: единый `LLM_API_KEY` на все openai-провайдеры;
-3 косметических MINOR Итерации 9 (`audit.go:17-18` пустые строки,
-`TestChatEndpointFullFlow` без `orch.Wait()`, marker не проверяется
-в CSV) — пост-MVP.
+Открытый техдолг: только единый `LLM_API_KEY` на все openai-провайдеры
+(пост-MVP, требует зашифрованного поля `api_key` в `model_providers`).
+3 косметических MINOR Итерации 9 + 12 MINOR этапа A (m1-m12) **закрыты**
+(`30c462b`, текущий коммит). См. `docs/PLAN.md` секция «Технический долг».
 
 Идентичность: dev-токен на роль + посев dev-пользователей,
 **фронт-flow зафиксирован**: `localStorage` + `Authorization: Bearer`
