@@ -217,8 +217,7 @@
   - Ф7 `fe8f58b` контракты documents + audit event_types
   - Processor pipeline + queue-loop в `_queue_loop` — worker полностью обрабатывает очередь
 - **Тесты:** worker ~27 unit/integration green; Go-стороне 10 пакетов green; docker compose worker healthy.
-- **Самооценка:** 9.5/10 — pipeline работает end-to-end, но без e2e smoke-теста (планируется в Итерации 16).
-- **Статус:** на финальном ревью архитектора.
+- **Архитектор:** ревью 1 — 9.7/10 (m1 неполный read upload, m2 orphan-MinIO при сбое CreateDocument); фикс — `+5` строк io.ReadAll + LimitReader + Remove в ветке ошибки. **Итог: 10/10 ✅.**
 
 ### ☐ Итерация 11 — Базовый RAG
 
