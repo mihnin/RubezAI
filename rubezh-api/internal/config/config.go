@@ -16,6 +16,11 @@ type Config struct {
 	SanitizerURL         string
 	LLMAPIKey            string
 	MappingEncryptionKey []byte // 32 байта; декодирован из base64 env
+	MinioEndpoint        string // Итерация 10; пусто → /api/documents 503
+	MinioAccessKey       string
+	MinioSecretKey       string
+	MinioBucket          string
+	MinioSecure          bool
 }
 
 // Load читает конфигурацию из переменных окружения, подставляя значения по
@@ -33,6 +38,11 @@ func Load() (Config, error) {
 		SanitizerURL:         getEnv("SANITIZER_URL", "http://rubezh-sanitizer:8001"),
 		LLMAPIKey:            os.Getenv("LLM_API_KEY"),
 		MappingEncryptionKey: mappingKey,
+		MinioEndpoint:        os.Getenv("MINIO_ENDPOINT"),
+		MinioAccessKey:       os.Getenv("MINIO_ROOT_USER"),
+		MinioSecretKey:       os.Getenv("MINIO_ROOT_PASSWORD"),
+		MinioBucket:          getEnv("MINIO_BUCKET", "rubezh-documents"),
+		MinioSecure:          os.Getenv("MINIO_SECURE") == "true",
 	}
 	if cfg.AuthSecret == "" {
 		return Config{}, fmt.Errorf("config: переменная AUTH_DEV_TOKEN_SECRET обязательна")

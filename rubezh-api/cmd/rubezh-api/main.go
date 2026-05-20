@@ -59,6 +59,26 @@ func main() {
 	llmRouter := buildRouter(providers, cfg.LLMAPIKey, mappingCipher, logger)
 	logger.Info("LLM Router инициализирован", "providers", llmRouter.Count())
 
+	// MinIO для документов (Итерация 10). Опционально — если env
+	// MINIO_ENDPOINT не задан, эндпойнты /api/documents отдают 503.
+	var minioClient *storage.MinioClient
+	if cfg.MinioEndpoint != "" {
+		mc, err := storage.NewMinioClient(storage.MinioConfig{
+			Endpoint: cfg.MinioEndpoint, AccessKey: cfg.MinioAccessKey,
+			SecretKey: cfg.MinioSecretKey, Bucket: cfg.MinioBucket,
+			Secure: cfg.MinioSecure,
+		})
+		if err != nil {
+			logger.Error("MinIO init failed", "error", err)
+			os.Exit(1)
+		}
+		if err := mc.EnsureBucket(ctx); err != nil {
+			logger.Error("MinIO bucket ensure failed", "error", err)
+			os.Exit(1)
+		}
+		minioClient = mc
+	}
+
 	handler, orchestrator := api.NewRouter(api.Deps{
 		Logger:        logger,
 		Store:         store,
@@ -66,6 +86,7 @@ func main() {
 		Router:        llmRouter,
 		SanitizerURL:  cfg.SanitizerURL,
 		MappingCipher: mappingCipher,
+		Minio:         minioClient,
 	})
 	srv := &http.Server{
 		Addr:              ":" + cfg.HTTPPort,

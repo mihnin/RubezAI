@@ -25,6 +25,7 @@ type Deps struct {
 	Router        *llm.Router    // LLM Router; используется /api/chat
 	SanitizerURL  string         // базовый URL сервиса rubezh-sanitizer
 	MappingCipher *crypto.Cipher // AES-GCM для pseudonym_mappings; nil ⇒ mappings не пишутся (только для тестов)
+	Minio         *storage.MinioClient // MinIO для документов (Итерация 10); nil ⇒ /api/documents 503
 }
 
 // NewRouter собирает HTTP-роутер сервиса. Маршруты /api защищены
@@ -71,6 +72,19 @@ func NewRouter(deps Deps) (http.Handler, *chat.Orchestrator) {
 			listIncidentNotesHandler(deps.Store))
 		api.Post("/incidents/{id}/notes",
 			addIncidentNoteHandler(deps.Store))
+		// Документы — Итерация 10.
+		api.Post("/documents",
+			uploadDocumentHandler(deps.Store, deps.Minio))
+		api.Get("/documents", listDocumentsHandler(deps.Store))
+		api.Get("/documents/{id}", getDocumentHandler(deps.Store))
+		api.Get("/documents/{id}/chunks",
+			listDocumentChunksHandler(deps.Store))
+		api.Get("/documents/{id}/download",
+			downloadDocumentHandler(deps.Store, deps.Minio))
+		api.Delete("/documents/{id}",
+			deleteDocumentHandler(deps.Store, deps.Minio))
+		api.Post("/documents/{id}/retry",
+			retryDocumentHandler(deps.Store))
 	})
 	return r, orchestrator
 }
