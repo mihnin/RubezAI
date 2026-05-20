@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -274,5 +275,247 @@ func TestRecordChatTerminationWithoutAssistant(t *testing.T) {
 	}
 	if ids.AuditEventID == "" {
 		t.Error("аудит-событие не записано")
+	}
+}
+
+// TestRecordChatRequestWritesRequestIDAndMappings — Итерация 9:
+// поле request_id и зашифрованные mappings пишутся в Tx1.
+func TestRecordChatRequestWritesRequestIDAndMappings(t *testing.T) {
+	store := testStore(t)
+	defer store.Close()
+	ctx := context.Background()
+	userID, sessionID := newSession(t, store)
+
+	reqID := "rid-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	mappings := []PseudonymMappingInput{
+		{Pseudonym: "ФИО_001", EntityType: "PERSON",
+			RawHash: "h1", RawValueEncrypted: []byte{0xAA, 0xBB}},
+		{Pseudonym: "ТЕЛ_001", EntityType: "PHONE",
+			RawHash: "h2", RawValueEncrypted: []byte{0xCC}},
+	}
+	ids, err := store.RecordChatRequest(ctx, ChatRequestRecord{
+		SessionID: sessionID, UserContent: "Звонил ФИО_001",
+		RequestID: reqID,
+		Sanitization: SanitizationData{
+			RiskLevel: "medium", RiskScore: 0.5,
+			RiskClasses: []string{"pii"},
+			Entities: json.RawMessage(`[
+				{"type":"PERSON","category":"pii","pseudonym":"ФИО_001","raw_hash":"h1","start":7,"end":15},
+				{"type":"PHONE","category":"pii","pseudonym":"ТЕЛ_001","raw_hash":"h2","start":16,"end":28}
+			]`),
+		},
+		Mappings: mappings,
+		Audit: AuditEvent{
+			UserID: userID, EventType: "chat_request",
+			Detail: map[string]any{"request_id": reqID},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordChatRequest: %v", err)
+	}
+
+	// 1. chat_messages.request_id заполнен.
+	var gotReqID string
+	if err := store.Pool().QueryRow(ctx,
+		`SELECT request_id FROM chat_messages WHERE id = $1`,
+		ids.UserMessageID).Scan(&gotReqID); err != nil {
+		t.Fatalf("чтение request_id: %v", err)
+	}
+	if gotReqID != reqID {
+		t.Errorf("chat_messages.request_id = %q, ожидалось %q", gotReqID, reqID)
+	}
+
+	// 2. pseudonym_mappings записаны и привязаны к sanitization_result.
+	rows, err := store.ListPseudonymMappings(ctx, ids.SanitizationResultID)
+	if err != nil {
+		t.Fatalf("ListPseudonymMappings: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Errorf("ожидалось 2 mapping'а, получено %d", len(rows))
+	}
+}
+
+// TestRecordChatRequestEmptyRequestIDIsNullable — backward compat
+// для тестов Итерации 8 (без request_id).
+func TestRecordChatRequestEmptyRequestIDIsNullable(t *testing.T) {
+	store := testStore(t)
+	defer store.Close()
+	ctx := context.Background()
+	userID, sessionID := newSession(t, store)
+
+	ids, err := store.RecordChatRequest(ctx, ChatRequestRecord{
+		SessionID: sessionID, UserContent: "no req-id",
+		// RequestID: "" — backward compat
+		Sanitization: SanitizationData{RiskLevel: "low",
+			RiskClasses: []string{}, Entities: json.RawMessage(`[]`)},
+		Audit: AuditEvent{UserID: userID, EventType: "chat_request"},
+	})
+	if err != nil {
+		t.Fatalf("RecordChatRequest: %v", err)
+	}
+	var reqID *string
+	_ = store.Pool().QueryRow(ctx,
+		`SELECT request_id FROM chat_messages WHERE id = $1`,
+		ids.UserMessageID).Scan(&reqID)
+	if reqID != nil {
+		t.Errorf("request_id должен быть NULL, получено %q", *reqID)
+	}
+}
+
+// TestRecordChatTerminationWritesRequestID — assistant получает тот же
+// request_id что и user (план §Р6).
+func TestRecordChatTerminationWritesRequestID(t *testing.T) {
+	store := testStore(t)
+	defer store.Close()
+	ctx := context.Background()
+	userID, sessionID := newSession(t, store)
+	providerID := newModelProviderID(t, store)
+
+	reqID := "pair-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	if _, err := store.RecordChatRequest(ctx, ChatRequestRecord{
+		SessionID: sessionID, UserContent: "test", RequestID: reqID,
+		Sanitization: SanitizationData{RiskLevel: "low",
+			RiskClasses: []string{}, Entities: json.RawMessage(`[]`)},
+		Audit: AuditEvent{UserID: userID, EventType: "chat_request"},
+	}); err != nil {
+		t.Fatalf("Tx1: %v", err)
+	}
+	ids, err := store.RecordChatTermination(ctx, ChatTerminationRecord{
+		SessionID: sessionID, AssistantContent: "ответ",
+		ModelProviderID: &providerID, RequestID: reqID,
+		Audit: AuditEvent{UserID: userID, EventType: "chat_response"},
+	})
+	if err != nil {
+		t.Fatalf("Tx2: %v", err)
+	}
+
+	var assistantReqID string
+	_ = store.Pool().QueryRow(ctx,
+		`SELECT request_id FROM chat_messages WHERE id = $1`,
+		ids.AssistantMessageID).Scan(&assistantReqID)
+	if assistantReqID != reqID {
+		t.Errorf("assistant.request_id = %q, ожидалось %q", assistantReqID, reqID)
+	}
+}
+
+// TestListChatMessagesRoundTrip — JOIN sanitization_results возвращает
+// user-сообщение с summary, assistant — без.
+func TestListChatMessagesRoundTrip(t *testing.T) {
+	store := testStore(t)
+	defer store.Close()
+	ctx := context.Background()
+	userID, sessionID := newSession(t, store)
+	providerID := newModelProviderID(t, store)
+	reqID := "list-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+
+	_, err := store.RecordChatRequest(ctx, ChatRequestRecord{
+		SessionID: sessionID, UserContent: "Тестовый запрос с ФИО_001",
+		RequestID: reqID,
+		Sanitization: SanitizationData{
+			RiskLevel: "medium", RiskScore: 0.42,
+			RiskClasses: []string{"pii"},
+			Entities: json.RawMessage(`[
+				{"type":"PERSON","category":"pii","pseudonym":"ФИО_001","raw_hash":"hashX","start":15,"end":22}
+			]`),
+		},
+		Audit: AuditEvent{UserID: userID, EventType: "chat_request"},
+	})
+	if err != nil {
+		t.Fatalf("Tx1: %v", err)
+	}
+	_, err = store.RecordChatTermination(ctx, ChatTerminationRecord{
+		SessionID: sessionID, AssistantContent: "Привет, ФИО_001",
+		ModelProviderID: &providerID, RequestID: reqID,
+		Audit: AuditEvent{UserID: userID, EventType: "chat_response"},
+	})
+	if err != nil {
+		t.Fatalf("Tx2: %v", err)
+	}
+
+	msgs, err := store.ListChatMessages(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("ListChatMessages: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("ожидалось 2 сообщения, получено %d", len(msgs))
+	}
+	// user → есть Sanitization; assistant → nil.
+	var userMsg, assistantMsg *ChatMessageWithSummary
+	for i := range msgs {
+		switch msgs[i].Role {
+		case "user":
+			userMsg = &msgs[i]
+		case "assistant":
+			assistantMsg = &msgs[i]
+		}
+	}
+	if userMsg == nil || assistantMsg == nil {
+		t.Fatalf("не нашли user/assistant: %+v", msgs)
+	}
+	if userMsg.SanitizationSummary == nil {
+		t.Fatal("у user-сообщения должна быть Sanitization")
+	}
+	if assistantMsg.SanitizationSummary != nil {
+		t.Error("у assistant-сообщения Sanitization должен быть nil")
+	}
+	if userMsg.RequestID == nil || *userMsg.RequestID != reqID {
+		t.Errorf("user.request_id = %v, ожидалось %q", userMsg.RequestID, reqID)
+	}
+	if userMsg.SanitizationSummary.Risk.Level != "medium" {
+		t.Errorf("risk_level = %q", userMsg.SanitizationSummary.Risk.Level)
+	}
+}
+
+// TestListChatMessagesEntitiesWhitelistFiltersStartEnd — критический
+// инвариант безопасности (план §Р5): start/end не должны утекать в API.
+func TestListChatMessagesEntitiesWhitelistFiltersStartEnd(t *testing.T) {
+	store := testStore(t)
+	defer store.Close()
+	ctx := context.Background()
+	userID, sessionID := newSession(t, store)
+
+	// Намеренно записываем entities с start/end — должны быть отсеяны.
+	if _, err := store.RecordChatRequest(ctx, ChatRequestRecord{
+		SessionID: sessionID, UserContent: "x",
+		Sanitization: SanitizationData{
+			RiskLevel: "low", RiskClasses: []string{"pii"},
+			Entities: json.RawMessage(`[
+				{"type":"PERSON","category":"pii","pseudonym":"ФИО_001","raw_hash":"h","start":10,"end":15},
+				{"type":"PHONE","category":"pii","pseudonym":"ТЕЛ_001","raw_hash":"h2","start":20,"end":30,"confidence":0.9}
+			]`),
+		},
+		Audit: AuditEvent{UserID: userID, EventType: "chat_request"},
+	}); err != nil {
+		t.Fatalf("Tx1: %v", err)
+	}
+
+	msgs, err := store.ListChatMessages(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("ListChatMessages: %v", err)
+	}
+	if len(msgs) != 1 || msgs[0].SanitizationSummary == nil {
+		t.Fatal("ожидалось 1 сообщение с Sanitization")
+	}
+	entities := msgs[0].SanitizationSummary.Entities
+	if len(entities) != 2 {
+		t.Fatalf("ожидалось 2 entity, получено %d", len(entities))
+	}
+	// Сериализуем DTO в JSON — это то, что увидит API-handler.
+	encoded, err := json.Marshal(entities)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	for _, banned := range []string{`"start"`, `"end"`, `"confidence"`, `"detector"`} {
+		if strings.Contains(string(encoded), banned) {
+			t.Errorf("в JSON-выводе обнаружено запрещённое поле %s: %s",
+				banned, string(encoded))
+		}
+	}
+	// Поля whitelist должны быть.
+	for _, want := range []string{`"type"`, `"category"`, `"pseudonym"`, `"raw_hash"`} {
+		if !strings.Contains(string(encoded), want) {
+			t.Errorf("в JSON-выводе нет публичного поля %s: %s",
+				want, string(encoded))
+		}
 	}
 }
