@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rubezh-ai/contracts/incidents.schema.json",
+  "title": "Контракт incidents: /api/incidents*",
+  "description": "Описывает DTO для /api/incidents (GET list, GET :id, POST manual, PATCH :id) и /api/incidents/:id/notes. Incident.reporter_id == null ⇔ auto-инцидент (создан системой по deny/escalate/response_leak_detected). PATCH использует If-Match: <updated_at> (RFC 7232; 412/428).",
+  "$defs": {
+    "IncidentTrigger": {
+      "type": ["string", "null"],
+      "description": "Computed-поле: derived из event_type ассоциированного audit_event'а. Для auto — из detail.trigger (deny|escalate|response_leak_detected); для manual — 'manual'. NULL только при отсутствии связанного audit_event'а (в MVP не встречается).",
+      "enum": ["deny", "escalate", "response_leak_detected", "manual", null]
+    },
+    "IncidentSeverity": {
+      "type": "string",
+      "enum": ["low", "medium", "high", "critical"]
+    },
+    "IncidentStatus": {
+      "type": "string",
+      "description": "4 значения по БД-схеме (миграция 000006). 'contained' — пост-MVP; UI уже скорректирован.",
+      "enum": ["open", "investigating", "resolved", "false_positive"]
+    },
+    "Incident": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "severity", "status", "title",
+        "created_at", "updated_at"
+      ],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "audit_event_id": { "type": ["string", "null"], "format": "uuid" },
+        "user_id": {
+          "type": ["string", "null"], "format": "uuid",
+          "description": "Субъект инцидента (чьи данные затронуты)."
+        },
+        "reporter_id": {
+          "type": ["string", "null"], "format": "uuid",
+          "description": "NULL = auto-инцидент; UUID = manual (создал пользователь)."
+        },
+        "assignee_id": { "type": ["string", "null"], "format": "uuid" },
+        "severity": { "$ref": "#/$defs/IncidentSeverity" },
+        "status": { "$ref": "#/$defs/IncidentStatus" },
+        "trigger": { "$ref": "#/$defs/IncidentTrigger" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "summary": { "type": ["string", "null"] },
+        "resolution": { "type": ["string", "null"] },
+        "closed_at": { "type": ["string", "null"], "format": "date-time" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "IncidentList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["incidents", "next_cursor"],
+      "properties": {
+        "incidents": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Incident" }
+        },
+        "next_cursor": { "type": ["string", "null"] }
+      }
+    },
+    "IncidentCreate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["audit_event_id", "severity", "title"],
+      "description": "Manual-создание (POST /api/incidents). В MVP audit_event_id обязателен — manual без триггера не поддерживается.",
+      "properties": {
+        "audit_event_id": { "type": "string", "format": "uuid" },
+        "severity": { "$ref": "#/$defs/IncidentSeverity" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "summary": { "type": ["string", "null"], "maxLength": 4000 }
+      }
+    },
+    "IncidentPatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "PATCH /api/incidents/:id. Все поля опциональны; assignee_unset=true очищает assignee (несовместимо с assignee_id). Status=resolved|false_positive требует непустой resolution. Конкурентный edit — If-Match: <updated_at>; 412 при mismatch, 428 при отсутствии header'а.",
+      "properties": {
+        "status": { "$ref": "#/$defs/IncidentStatus" },
+        "severity": { "$ref": "#/$defs/IncidentSeverity" },
+        "assignee_id": { "type": ["string", "null"], "format": "uuid" },
+        "assignee_unset": { "type": "boolean" },
+        "resolution": { "type": ["string", "null"], "maxLength": 4000 }
+      }
+    },
+    "IncidentNote": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "incident_id", "author_id", "content", "created_at"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "incident_id": { "type": "string", "format": "uuid" },
+        "author_id": { "type": "string", "format": "uuid" },
+        "content": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "created_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "IncidentNoteCreate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content"],
+      "properties": {
+        "content": { "type": "string", "minLength": 1, "maxLength": 2000 }
+      }
+    },
+    "IncidentNoteList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["notes"],
+      "properties": {
+        "notes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/IncidentNote" }
+        }
+      }
+    }
+  }
+}

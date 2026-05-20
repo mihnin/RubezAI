@@ -49,8 +49,22 @@ func NewRouter(deps Deps) http.Handler {
 		api.Post("/models", createModelHandler(deps.Store))
 		api.Get("/chat/sessions", listChatSessionsHandler(deps.Store))
 		api.Post("/chat/sessions", createChatSessionHandler(deps.Store))
+		api.Get("/chat/sessions/{id}/messages",
+			listChatMessagesHandler(deps.Store))
 		api.Post("/chat", chatHandler(
 			orchestrator, deps.Store, deps.Router, deps.Logger))
+		// Audit / Incidents — Итерация 9.
+		api.Get("/audit-events", listAuditEventsHandler(deps.Store))
+		api.Get("/audit-events/{id}", getAuditEventHandler(deps.Store))
+		api.Post("/audit-events/export", exportAuditEventsHandler(deps.Store))
+		api.Get("/incidents", listIncidentsHandler(deps.Store))
+		api.Post("/incidents", createIncidentHandler(deps.Store))
+		api.Get("/incidents/{id}", getIncidentHandler(deps.Store))
+		api.Patch("/incidents/{id}", patchIncidentHandler(deps.Store))
+		api.Get("/incidents/{id}/notes",
+			listIncidentNotesHandler(deps.Store))
+		api.Post("/incidents/{id}/notes",
+			addIncidentNoteHandler(deps.Store))
 	})
 	return r
 }

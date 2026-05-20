@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rubezh-ai/contracts/audit.schema.json",
+  "title": "Контракт audit: /api/audit-events*",
+  "description": "Описывает выходные DTO эндпойнтов /api/audit-events (GET list, GET :id, POST /export). audit_events — append-only (триггер БД). Эндпойнты добавляются в Итерации 9; список авторитетных типов событий приведён в $defs.AuditEventType.",
+  "$defs": {
+    "AuditEventType": {
+      "type": "string",
+      "description": "Множество известных типов аудит-событий на момент Итерации 9. Список открыт к расширению в будущих итерациях; клиент должен корректно отображать неизвестные значения как обобщённый chip.",
+      "enum": [
+        "chat_request",
+        "chat_response",
+        "chat_blocked",
+        "chat_error",
+        "policy_tested",
+        "model_created",
+        "model_updated",
+        "model_disabled",
+        "model_deleted",
+        "incident_created_auto",
+        "incident_created_manual",
+        "incident_status_changed",
+        "incident_severity_changed",
+        "incident_assigned",
+        "incident_resolved",
+        "incident_note_added",
+        "incident_create_failed",
+        "audit_exported",
+        "auth_login",
+        "auth_login_failed"
+      ]
+    },
+    "AuditRiskLevel": {
+      "type": ["string", "null"],
+      "enum": ["low", "medium", "high", "critical", null]
+    },
+    "AuditPolicyDecision": {
+      "type": ["string", "null"],
+      "enum": [
+        "allow_raw",
+        "allow_masked",
+        "allow_summary_only",
+        "deny",
+        "escalate",
+        null
+      ]
+    },
+    "AuditEventSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "created_at", "user_id", "event_type"],
+      "description": "Облегчённый DTO для list-эндпойнта (без masked_payload, без detail).",
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "user_id": { "type": "string", "format": "uuid" },
+        "event_type": { "$ref": "#/$defs/AuditEventType" },
+        "model_provider_id": { "type": ["string", "null"], "format": "uuid" },
+        "risk_level": { "$ref": "#/$defs/AuditRiskLevel" },
+        "risk_classes": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["pii", "secret", "commercial"] }
+        },
+        "policy_decision": { "$ref": "#/$defs/AuditPolicyDecision" },
+        "request_id": { "type": ["string", "null"] },
+        "has_leak": {
+          "type": "boolean",
+          "description": "Извлечено из detail.response_leak_detected; удобно для UI."
+        }
+      }
+    },
+    "AuditEventDetail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "created_at", "user_id", "event_type", "detail"],
+      "description": "Полный DTO для single-эндпойнта (включает masked_payload и detail jsonb).",
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "user_id": { "type": "string", "format": "uuid" },
+        "event_type": { "$ref": "#/$defs/AuditEventType" },
+        "model_provider_id": { "type": ["string", "null"], "format": "uuid" },
+        "risk_level": { "$ref": "#/$defs/AuditRiskLevel" },
+        "risk_classes": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["pii", "secret", "commercial"] }
+        },
+        "policy_decision": { "$ref": "#/$defs/AuditPolicyDecision" },
+        "policy_version_id": { "type": ["string", "null"], "format": "uuid" },
+        "matched_rule": { "type": ["string", "null"] },
+        "masked_payload": { "type": ["string", "null"] },
+        "request_id": { "type": ["string", "null"] },
+        "has_leak": { "type": "boolean" },
+        "detail": {
+          "type": "object",
+          "description": "Произвольный jsonb-объект (request_id, leaked_pseudonyms, stage, error и т.п.). additionalProperties: true."
+        }
+      }
+    },
+    "AuditEventList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["events", "next_cursor"],
+      "description": "Ответ list-эндпойнта. next_cursor = null если страница последняя.",
+      "properties": {
+        "events": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/AuditEventSummary" }
+        },
+        "next_cursor": { "type": ["string", "null"] }
+      }
+    },
+    "AuditExportRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format"],
+      "description": "Параметры экспорта (POST /api/audit-events/export). filters — query-параметры в виде вложенного объекта; format — csv|ndjson. Каждый экспорт пишет audit-event audit_exported.",
+      "properties": {
+        "format": { "type": "string", "enum": ["csv", "ndjson"] },
+        "include_payload": {
+          "type": "boolean",
+          "description": "Включать masked_payload (default true)."
+        },
+        "filters": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "from": { "type": ["string", "null"], "format": "date-time" },
+            "to": { "type": ["string", "null"], "format": "date-time" },
+            "user_id": { "type": ["string", "null"], "format": "uuid" },
+            "event_types": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/AuditEventType" }
+            },
+            "policy_decisions": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/AuditPolicyDecision" }
+            },
+            "risk_levels": {
+              "type": "array",
+              "items": { "type": "string", "enum": ["low","medium","high","critical"] }
+            },
+            "model_provider_id": { "type": ["string", "null"], "format": "uuid" },
+            "has_leak": { "type": ["boolean", "null"] },
+            "q": { "type": ["string", "null"] }
+          }
+        }
+      }
+    }
+  }
+}
