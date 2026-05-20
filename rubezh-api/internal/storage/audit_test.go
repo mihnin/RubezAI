@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"testing"
 	"time"
@@ -110,3 +111,179 @@ func TestInsertAuditEventFullFields(t *testing.T) {
 		t.Errorf("risk_classes = %v, ожидалось 2 элемента", gotClasses)
 	}
 }
+
+// TestGetAuditEventNotFound — несуществующий id → ErrAuditEventNotFound.
+func TestGetAuditEventNotFound(t *testing.T) {
+	s := testStore(t)
+	defer s.Close()
+	_, err := s.GetAuditEvent(context.Background(),
+		"00000000-0000-0000-0000-000000000000")
+	if !errors.Is(err, ErrAuditEventNotFound) {
+		t.Errorf("ожидалась ErrAuditEventNotFound, получено: %v", err)
+	}
+}
+
+// TestGetAuditEventRoundTrip — insert + get возвращает все поля.
+func TestGetAuditEventRoundTrip(t *testing.T) {
+	s := testStore(t)
+	defer s.Close()
+	ctx := context.Background()
+	level := "high"
+	decision := "deny"
+	rule := "external+secret"
+	payload := "запрос с api_key=SECRET_001"
+	id, err := s.InsertAuditEvent(ctx, AuditEvent{
+		UserID: devUserID(t, s), EventType: "chat_blocked",
+		RiskLevel: &level, RiskClasses: []string{"secret"},
+		PolicyDecision: &decision, MatchedRule: &rule,
+		MaskedPayload: &payload,
+		Detail:        map[string]any{"request_id": "r-X"},
+	})
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	got, err := s.GetAuditEvent(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.ID != id || got.EventType != "chat_blocked" ||
+		got.RiskLevel == nil || *got.RiskLevel != "high" ||
+		got.PolicyDecision == nil || *got.PolicyDecision != "deny" {
+		t.Errorf("Get вернул некорректную запись: %+v", got)
+	}
+}
+
+// TestListAuditEventsByEventType — мультизначный фильтр event_type.
+func TestListAuditEventsByEventType(t *testing.T) {
+	s := testStore(t)
+	defer s.Close()
+	ctx := context.Background()
+	marker := "list-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	userID := devUserID(t, s)
+	for _, et := range []string{"chat_request", "chat_response", "chat_error"} {
+		if _, err := s.InsertAuditEvent(ctx, AuditEvent{
+			UserID: userID, EventType: et,
+			Detail: map[string]any{"marker": marker},
+		}); err != nil {
+			t.Fatalf("Insert %s: %v", et, err)
+		}
+	}
+
+	rows, err := s.ListAuditEvents(ctx, AuditFilter{
+		EventTypes: []string{"chat_request", "chat_response"},
+		Q:          ptrStr("`marker`:`" + marker + "`"), // не сматчится
+	})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	// Поскольку Q-фильтр у нас по masked_payload (а мы не задавали его),
+	// результат должен быть пустым. Перезапросим без Q.
+	rows, err = s.ListAuditEvents(ctx, AuditFilter{
+		EventTypes: []string{"chat_request", "chat_response"},
+		Limit:      100,
+	})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for _, r := range rows {
+		if r.EventType != "chat_request" && r.EventType != "chat_response" {
+			t.Errorf("неожиданный event_type: %s", r.EventType)
+		}
+	}
+}
+
+// TestListAuditEventsHasLeakFilter — has_leak=true возвращает только
+// записи с detail.response_leak_detected = true.
+func TestListAuditEventsHasLeakFilter(t *testing.T) {
+	s := testStore(t)
+	defer s.Close()
+	ctx := context.Background()
+	userID := devUserID(t, s)
+
+	leakID, err := s.InsertAuditEvent(ctx, AuditEvent{
+		UserID: userID, EventType: "chat_response",
+		Detail: map[string]any{"response_leak_detected": true,
+			"leaked_pseudonyms": []string{"ФИО_001"}},
+	})
+	if err != nil {
+		t.Fatalf("Insert leak: %v", err)
+	}
+	noLeakID, err := s.InsertAuditEvent(ctx, AuditEvent{
+		UserID: userID, EventType: "chat_response",
+		Detail: map[string]any{"response_leak_detected": false},
+	})
+	if err != nil {
+		t.Fatalf("Insert no-leak: %v", err)
+	}
+
+	tr := true
+	leakRows, err := s.ListAuditEvents(ctx, AuditFilter{
+		HasLeak: &tr, Limit: 100})
+	if err != nil {
+		t.Fatalf("List leak: %v", err)
+	}
+	var foundLeak, foundNoLeak bool
+	for _, r := range leakRows {
+		if r.ID == leakID {
+			foundLeak = true
+			if !r.HasLeak() {
+				t.Error("HasLeak() возвращает false для записи с утечкой")
+			}
+		}
+		if r.ID == noLeakID {
+			foundNoLeak = true
+		}
+	}
+	if !foundLeak {
+		t.Error("HasLeak=true не вернул запись с утечкой")
+	}
+	if foundNoLeak {
+		t.Error("HasLeak=true вернул запись без утечки")
+	}
+}
+
+// TestListAuditEventsCursorPagination — keyset стабилен между страницами.
+func TestListAuditEventsCursorPagination(t *testing.T) {
+	s := testStore(t)
+	defer s.Close()
+	ctx := context.Background()
+	userID := devUserID(t, s)
+	// Создаём 5 событий — порядок гарантированно различный по created_at.
+	for i := 0; i < 5; i++ {
+		if _, err := s.InsertAuditEvent(ctx, AuditEvent{
+			UserID: userID, EventType: "chat_request",
+		}); err != nil {
+			t.Fatalf("Insert: %v", err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	// Page 1: limit 2.
+	page1, err := s.ListAuditEvents(ctx, AuditFilter{
+		EventTypes: []string{"chat_request"}, Limit: 2})
+	if err != nil || len(page1) != 2 {
+		t.Fatalf("page1: err=%v len=%d", err, len(page1))
+	}
+
+	// Page 2: cursor от последней строки page1.
+	last := page1[len(page1)-1]
+	page2, err := s.ListAuditEvents(ctx, AuditFilter{
+		EventTypes:      []string{"chat_request"},
+		CursorCreatedAt: &last.CreatedAt,
+		CursorID:        &last.ID,
+		Limit:           2,
+	})
+	if err != nil || len(page2) == 0 {
+		t.Fatalf("page2: err=%v len=%d", err, len(page2))
+	}
+	// Проверяем, что страницы не пересекаются.
+	for _, r1 := range page1 {
+		for _, r2 := range page2 {
+			if r1.ID == r2.ID {
+				t.Errorf("страницы пересекаются по id=%s", r1.ID)
+			}
+		}
+	}
+}
+
+func ptrStr(s string) *string { return &s }
