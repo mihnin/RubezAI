@@ -47,27 +47,46 @@ On-prem-ready приложение для госкомпаний, операто
 ## Быстрый старт
 
 ```bash
-# 1. Подготовить переменные окружения
+# 1. Переменные окружения
 cp .env.example .env          # Windows: Copy-Item .env.example .env
 
-# 2. Поднять инфраструктуру (PostgreSQL + MinIO)
+# 2. Применить миграции БД (one-shot)
 docker compose up -d postgres minio
-#   Linux/CI:  make infra
-#   Windows:   .\make.ps1 infra
+docker compose run --rm migrate
 
-# 3. Проверить статус
+# 3. Поднять все сервисы (включая Web UI)
+docker compose up -d --build
+
+# 4. Проверить статус
 docker compose ps
 ```
 
-MinIO-консоль после запуска — http://localhost:9001 (логин/пароль из `.env`).
+После старта:
 
-> Текущий статус — Итерация 0 (скелет репозитория). Прикладные сервисы
-> (`rubezh-api`, `rubezh-sanitizer`, `rubezh-worker`, `rubezh-web`) добавляются
-> в своих итерациях согласно [`docs/PLAN.md`](docs/PLAN.md).
+- **Web UI**     — http://localhost:5173 (вход через выбор роли в dev-режиме)
+- **API**       — http://localhost:8080/health
+- **Sanitizer** — http://localhost:8001/health
+- **Worker**    — http://localhost:8002/health
+- **MinIO**     — http://localhost:9001 (консоль)
+
+### Минимальный e2e-сценарий
+
+1. Открыть http://localhost:5173 → выбрать роль `user` → войти.
+2. **Чат** → отправить «Меня зовут Иван Иванов, мой телефон +79001234567» →
+   увидеть SSE-стрим ответа + предупреждение «Решение: allow_masked» +
+   количество обезличенных сущностей.
+3. **Документы** → загрузить PDF/DOCX → дождаться `status=done`.
+4. **Аудит** → проверить события `chat_request_received`,
+   `chat_response_completed`, `document_uploaded` без raw-данных.
+5. **Инциденты** — если отправляли запрос с правилом deny, увидеть
+   `auto`-инцидент со ссылкой на `audit_event_id`.
 
 ## Статус проекта
 
-MVP в активной разработке. Прогресс по итерациям — в [`docs/PLAN.md`](docs/PLAN.md).
+**MVP завершён.** Backend — Go (api) + Python (sanitizer, worker), Frontend —
+React + Vite, всё запускается одной командой `docker compose up`. Все 15
+критериев приёмки MVP закрыты. Прогресс по итерациям — в
+[`docs/PLAN.md`](docs/PLAN.md).
 
 ## Лицензия
 

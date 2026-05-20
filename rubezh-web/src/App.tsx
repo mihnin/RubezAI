@@ -1,21 +1,33 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import { useAuth } from "./auth/context";
 import LoginPage from "./pages/LoginPage";
-import HomePage from "./pages/HomePage";
+import ChatPage from "./pages/ChatPage";
+import DocumentsPage from "./pages/DocumentsPage";
+import PoliciesPage from "./pages/PoliciesPage";
+import ModelsPage from "./pages/ModelsPage";
+import AuditLogPage from "./pages/AuditLogPage";
+import IncidentsPage from "./pages/IncidentsPage";
+import AppLayout from "./components/AppLayout";
 
-/** Корневой router. /login публичный; всё остальное — за RequireAuth. */
 export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route
-        path="/"
         element={
           <RequireAuth>
-            <HomePage />
+            <AppLayout />
           </RequireAuth>
         }
-      />
+      >
+        <Route path="/" element={<Navigate to="/chat" replace />} />
+        <Route path="/chat" element={<ChatPage />} />
+        <Route path="/documents" element={<DocumentsPage />} />
+        <Route path="/policies" element={<PoliciesPage />} />
+        <Route path="/models" element={<ModelsPage />} />
+        <Route path="/audit-log" element={<AuditLogPage />} />
+        <Route path="/incidents" element={<IncidentsPage />} />
+      </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
