@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/rubezh-ai/rubezh-api/internal/auth"
 	"github.com/rubezh-ai/rubezh-api/internal/crypto"
 	"github.com/rubezh-ai/rubezh-api/internal/storage"
 )
@@ -101,10 +102,18 @@ func modelProviderToDTO(p storage.ModelProvider) modelProviderDTO {
 }
 
 // modelProviderAPIKeyAAD — AAD для шифрования API-ключа провайдера.
-// Привязан к name: переименование провайдера сделает ключ нечитаемым
-// (требует переустановки ключа — намеренно).
-func modelProviderAPIKeyAAD(name string) []byte {
-	return []byte("model_provider_api_key:" + name)
+// Привязан к иммутабельному `id` (UUID, не меняется при rename) —
+// закрывает MINOR-1 ревью Итерации 9.5. Тот же helper используется
+// в main.go buildRouter (через storage.ModelProvider.ID).
+func modelProviderAPIKeyAAD(providerID string) []byte {
+	return []byte("model_provider_api_key:" + providerID)
+}
+
+// modelWriteRoles — кто может создавать/менять провайдеров и ключи
+// (MAJOR-1 ревью Итерации 9.5: RBAC для security-критичных операций).
+var modelWriteRoles = map[auth.Role]bool{
+	auth.RoleAdmin:     true,
+	auth.RoleDeveloper: true, // для dev/test-инструментов; can be tightened post-MVP
 }
 
 // listModelsHandler возвращает список провайдеров моделей.
@@ -125,10 +134,20 @@ func listModelsHandler(store *storage.Storage) http.HandlerFunc {
 
 // createModelHandler регистрирует нового провайдера модели.
 // cipher — для шифрования опционального api_key из тела запроса (Итерация 9.5).
+// AAD = id (известен только после INSERT) — поэтому шифруем в 2 этапа:
+// (1) CreateModelProvider без api_key → RETURNING id;
+// (2) Encrypt(plaintext, AAD=id) → UpdateModelProviderAPIKey.
+// Если шаг 2 упал — провайдер существует без ключа; admin может
+// повторить через POST /api/models/:id/api-key.
 func createModelHandler(
 	store *storage.Storage, cipher *crypto.Cipher,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		role, _ := auth.RoleFromContext(r.Context())
+		if !modelWriteRoles[role] {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		var req createModelRequest
 		if err := decodeJSON(w, r, &req); err != nil {
 			http.Error(w, "некорректный JSON", http.StatusBadRequest)
@@ -138,21 +157,11 @@ func createModelHandler(
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		var encrypted []byte
-		if req.APIKey != nil && *req.APIKey != "" {
-			if cipher == nil {
-				http.Error(w, "MAPPING_ENCRYPTION_KEY не настроен — api_key недоступен",
-					http.StatusServiceUnavailable)
-				return
-			}
-			ct, err := cipher.Encrypt([]byte(*req.APIKey),
-				modelProviderAPIKeyAAD(req.Name))
-			if err != nil {
-				http.Error(w, "ошибка шифрования api_key",
-					http.StatusInternalServerError)
-				return
-			}
-			encrypted = ct
+		hasKey := req.APIKey != nil && *req.APIKey != ""
+		if hasKey && cipher == nil {
+			http.Error(w, "MAPPING_ENCRYPTION_KEY не настроен — api_key недоступен",
+				http.StatusServiceUnavailable)
+			return
 		}
 		created, err := store.CreateModelProvider(r.Context(), storage.ModelProvider{
 			Name:            req.Name,
@@ -161,7 +170,6 @@ func createModelHandler(
 			Endpoint:        req.Endpoint,
 			MaxTokens:       req.MaxTokens,
 			RateLimitPerMin: req.RateLimitPerMin,
-			APIKeyEncrypted: encrypted,
 		})
 		if err != nil {
 			if errors.Is(err, storage.ErrModelProviderExists) {
@@ -173,16 +181,39 @@ func createModelHandler(
 				http.StatusInternalServerError)
 			return
 		}
+		// Фаза 2: шифрование с AAD=id (закрывает MINOR-1 ревью 9.5).
+		if hasKey {
+			ct, encErr := cipher.Encrypt([]byte(*req.APIKey),
+				modelProviderAPIKeyAAD(created.ID))
+			if encErr != nil {
+				http.Error(w, "ошибка шифрования api_key",
+					http.StatusInternalServerError)
+				return
+			}
+			if updErr := store.UpdateModelProviderAPIKey(r.Context(),
+				created.ID, ct); updErr != nil {
+				http.Error(w, "ошибка сохранения api_key",
+					http.StatusInternalServerError)
+				return
+			}
+			created.APIKeyEncrypted = ct
+		}
 		writeJSON(w, http.StatusCreated, modelProviderToDTO(created))
 	}
 }
 
 // updateModelAPIKeyHandler — POST /api/models/:id/api-key.
 // Заменяет зашифрованный ключ или удаляет его (api_key="").
+// AAD = id (иммутабельный, MINOR-1 ревью 9.5). RBAC — admin/developer.
 func updateModelAPIKeyHandler(
 	store *storage.Storage, cipher *crypto.Cipher,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		role, _ := auth.RoleFromContext(r.Context())
+		if !modelWriteRoles[role] {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		id := chi.URLParam(r, "id")
 		if !isUUID(id) {
 			http.NotFound(w, r)
@@ -193,13 +224,12 @@ func updateModelAPIKeyHandler(
 			http.Error(w, "некорректный JSON", http.StatusBadRequest)
 			return
 		}
-		// Получаем провайдера — нужно name для AAD.
-		provider, err := store.GetModelProvider(r.Context(), id)
-		if errors.Is(err, storage.ErrModelProviderNotFound) {
-			http.NotFound(w, r)
-			return
-		}
-		if err != nil {
+		// Проверка существования провайдера (404 vs 5xx разведение).
+		if _, err := store.GetModelProvider(r.Context(), id); err != nil {
+			if errors.Is(err, storage.ErrModelProviderNotFound) {
+				http.NotFound(w, r)
+				return
+			}
 			http.Error(w, "ошибка чтения", http.StatusInternalServerError)
 			return
 		}
@@ -211,7 +241,7 @@ func updateModelAPIKeyHandler(
 				return
 			}
 			ct, encErr := cipher.Encrypt([]byte(req.APIKey),
-				modelProviderAPIKeyAAD(provider.Name))
+				modelProviderAPIKeyAAD(id))
 			if encErr != nil {
 				http.Error(w, "ошибка шифрования",
 					http.StatusInternalServerError)

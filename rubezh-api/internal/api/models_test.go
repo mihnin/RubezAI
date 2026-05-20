@@ -42,7 +42,7 @@ func TestCreateModelEndpoint(t *testing.T) {
 	body := `{"name":"` + name + `","trust_level":"trusted_local","adapter":"mock"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/models",
 		bytes.NewBufferString(body))
-	req.Header.Set("Authorization", userToken())
+	req.Header.Set("Authorization", adminToken())
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -58,7 +58,7 @@ func TestCreateModelEndpoint(t *testing.T) {
 
 	dup := httptest.NewRequest(http.MethodPost, "/api/models",
 		bytes.NewBufferString(body))
-	dup.Header.Set("Authorization", userToken())
+	dup.Header.Set("Authorization", adminToken())
 	dupRec := httptest.NewRecorder()
 	router.ServeHTTP(dupRec, dup)
 	if dupRec.Code != http.StatusConflict {
@@ -72,7 +72,7 @@ func TestCreateModelRejectsInvalidTrustLevel(t *testing.T) {
 	body := `{"name":"x","trust_level":"hacker_cloud","adapter":"mock"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/models",
 		bytes.NewBufferString(body))
-	req.Header.Set("Authorization", userToken())
+	req.Header.Set("Authorization", adminToken())
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -87,7 +87,7 @@ func TestCreateModelOpenAIRequiresEndpoint(t *testing.T) {
 	body := `{"name":"x","trust_level":"external","adapter":"openai_compatible"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/models",
 		bytes.NewBufferString(body))
-	req.Header.Set("Authorization", userToken())
+	req.Header.Set("Authorization", adminToken())
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -99,7 +99,7 @@ func TestListModelsEndpoint(t *testing.T) {
 	router, closeStore := dbRouter(t)
 	defer closeStore()
 	req := httptest.NewRequest(http.MethodGet, "/api/models", nil)
-	req.Header.Set("Authorization", userToken())
+	req.Header.Set("Authorization", adminToken())
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -116,7 +116,7 @@ func TestCreateModelRejectsBadJSON(t *testing.T) {
 	defer closeStore()
 	req := httptest.NewRequest(http.MethodPost, "/api/models",
 		bytes.NewBufferString("{битый"))
-	req.Header.Set("Authorization", userToken())
+	req.Header.Set("Authorization", adminToken())
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -131,7 +131,7 @@ func TestCreateModelResponseFields(t *testing.T) {
 	body := `{"name":"` + name + `","trust_level":"russian_cloud","adapter":"mock"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/models",
 		bytes.NewBufferString(body))
-	req.Header.Set("Authorization", userToken())
+	req.Header.Set("Authorization", adminToken())
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -159,7 +159,7 @@ func TestCreateModelPersistsNullableFields(t *testing.T) {
 		`"max_tokens":2048,"rate_limit_per_min":60}`
 	req := httptest.NewRequest(http.MethodPost, "/api/models",
 		bytes.NewBufferString(body))
-	req.Header.Set("Authorization", userToken())
+	req.Header.Set("Authorization", adminToken())
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -184,7 +184,7 @@ func TestCreateModelRejectsInvalidAdapter(t *testing.T) {
 	body := `{"name":"x","trust_level":"external","adapter":"langchain"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/models",
 		bytes.NewBufferString(body))
-	req.Header.Set("Authorization", userToken())
+	req.Header.Set("Authorization", adminToken())
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -201,7 +201,7 @@ func TestCreateModelRejectsMissingName(t *testing.T) {
 	} {
 		req := httptest.NewRequest(http.MethodPost, "/api/models",
 			bytes.NewBufferString(body))
-		req.Header.Set("Authorization", userToken())
+		req.Header.Set("Authorization", adminToken())
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)
 		if rec.Code != http.StatusBadRequest {
@@ -220,7 +220,7 @@ func TestCreateModelRejectsNonPositiveLimits(t *testing.T) {
 	} {
 		req := httptest.NewRequest(http.MethodPost, "/api/models",
 			bytes.NewBufferString(body))
-		req.Header.Set("Authorization", userToken())
+		req.Header.Set("Authorization", adminToken())
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)
 		if rec.Code != http.StatusBadRequest {
@@ -239,7 +239,7 @@ func TestCreateModelAcceptsAllTrustLevels(t *testing.T) {
 		body := `{"name":"` + name + `","trust_level":"` + trust + `","adapter":"mock"}`
 		req := httptest.NewRequest(http.MethodPost, "/api/models",
 			bytes.NewBufferString(body))
-		req.Header.Set("Authorization", userToken())
+		req.Header.Set("Authorization", adminToken())
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)
 		if rec.Code != http.StatusCreated {
@@ -252,7 +252,7 @@ func TestModelsEndpointRejectsWrongMethod(t *testing.T) {
 	router, closeStore := dbRouter(t)
 	defer closeStore()
 	req := httptest.NewRequest(http.MethodDelete, "/api/models", nil)
-	req.Header.Set("Authorization", userToken())
+	req.Header.Set("Authorization", adminToken())
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
@@ -264,7 +264,7 @@ func TestCreateModelRejectsEmptyBody(t *testing.T) {
 	router, closeStore := dbRouter(t)
 	defer closeStore()
 	req := httptest.NewRequest(http.MethodPost, "/api/models", nil)
-	req.Header.Set("Authorization", userToken())
+	req.Header.Set("Authorization", adminToken())
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -294,11 +294,11 @@ func TestModelsResponseDoesNotLeakApiKey(t *testing.T) {
 		`"adapter":"openai_compatible","endpoint":"http://llm.local"}`
 	post := httptest.NewRequest(http.MethodPost, "/api/models",
 		bytes.NewBufferString(body))
-	post.Header.Set("Authorization", userToken())
+	post.Header.Set("Authorization", adminToken())
 	router.ServeHTTP(httptest.NewRecorder(), post)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/models", nil)
-	req.Header.Set("Authorization", userToken())
+	req.Header.Set("Authorization", adminToken())
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	raw := rec.Body.String()
@@ -325,7 +325,7 @@ func TestCreateModelRejectsMalformedEndpoint(t *testing.T) {
 			`"adapter":"openai_compatible","endpoint":"` + endpoint + `"}`
 		req := httptest.NewRequest(http.MethodPost, "/api/models",
 			bytes.NewBufferString(body))
-		req.Header.Set("Authorization", userToken())
+		req.Header.Set("Authorization", adminToken())
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)
 		if rec.Code != http.StatusBadRequest {
@@ -341,7 +341,7 @@ func TestCreateModelRejectsUnknownField(t *testing.T) {
 	body := `{"name":"x","trust_level":"external","adapter":"mock","trust_lvl":"oops"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/models",
 		bytes.NewBufferString(body))
-	req.Header.Set("Authorization", userToken())
+	req.Header.Set("Authorization", adminToken())
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -356,7 +356,7 @@ func TestCreateModelRejectsTrailingData(t *testing.T) {
 	body := `{"name":"x","trust_level":"external","adapter":"mock"}{"name":"y"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/models",
 		bytes.NewBufferString(body))
-	req.Header.Set("Authorization", userToken())
+	req.Header.Set("Authorization", adminToken())
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {

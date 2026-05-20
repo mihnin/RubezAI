@@ -128,7 +128,10 @@ func buildRouter(
 		}
 		switch provider.Adapter {
 		case "openai_compatible":
-			key := resolveProviderKey(provider, envFallback, cipher, logger)
+			key, ok := resolveProviderKey(provider, envFallback, cipher, logger)
+			if !ok {
+				continue // fail-closed: не регистрируем без ключа
+			}
 			router.Register(llm.NewOpenAIProvider(
 				provider.Name, provider.Endpoint, key))
 		default:
@@ -138,24 +141,27 @@ func buildRouter(
 	return router
 }
 
-// resolveProviderKey расшифровывает api_key провайдера или fallback на env.
-// AAD = []byte("model_provider_api_key:" + name) — должно совпадать с
-// тем, что использовалось при шифровании в api/models.go.
+// resolveProviderKey расшифровывает api_key провайдера или возвращает
+// envFallback **только** если ключ в БД не задан (HasAPIKey()==false).
+// При HasAPIKey()==true и ошибке расшифровки — возвращает ("", false):
+// провайдер не регистрируется (MAJOR-2 ревью 9.5: fail-closed вместо
+// silent fallback на env, который маскировал бы мисконфиг ключа).
+// AAD = id (иммутабельный, MINOR-1 ревью 9.5).
 func resolveProviderKey(
 	provider storage.ModelProvider, envFallback string,
 	cipher *crypto.Cipher, logger *slog.Logger,
-) string {
+) (string, bool) {
 	if !provider.HasAPIKey() {
-		return envFallback
+		return envFallback, true
 	}
-	aad := []byte("model_provider_api_key:" + provider.Name)
+	aad := []byte("model_provider_api_key:" + provider.ID)
 	plain, err := cipher.Decrypt(provider.APIKeyEncrypted, aad)
 	if err != nil {
-		logger.Error("ошибка расшифровки api_key — fallback на env",
-			"provider", provider.Name, "error", err)
-		return envFallback
+		logger.Error("api_key провайдера не расшифрован — провайдер пропущен",
+			"provider", provider.Name, "id", provider.ID, "error", err)
+		return "", false
 	}
-	return string(plain)
+	return string(plain), true
 }
 
 // logLevel переводит строковый уровень из конфигурации в slog.Level.

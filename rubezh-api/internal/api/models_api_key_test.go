@@ -14,6 +14,39 @@ import (
 	"github.com/rubezh-ai/rubezh-api/internal/storage"
 )
 
+// TestCreateModelForbiddenForUser — MAJOR-1 ревью Итерации 9.5:
+// security-критичный POST /api/models требует admin/developer.
+func TestCreateModelForbiddenForUser(t *testing.T) {
+	router, closeStore := dbRouter(t)
+	defer closeStore()
+	body := `{"name":"u-no","trust_level":"trusted_local",` +
+		`"adapter":"openai_compatible","endpoint":"http://x"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/models",
+		bytes.NewBufferString(body))
+	req.Header.Set("Authorization", userToken())
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("code = %d, ожидалось 403 (user не может создать модель)",
+			rec.Code)
+	}
+}
+
+// TestUpdateAPIKeyForbiddenForUser — RBAC на ротацию ключа.
+func TestUpdateAPIKeyForbiddenForUser(t *testing.T) {
+	router, closeStore := dbRouter(t)
+	defer closeStore()
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/models/00000000-0000-0000-0000-000000000001/api-key",
+		bytes.NewBufferString(`{"api_key":"x"}`))
+	req.Header.Set("Authorization", userToken())
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("code = %d, ожидалось 403", rec.Code)
+	}
+}
+
 // TestCreateModelWithAPIKey — POST /api/models с api_key:
 // шифруется и сохраняется; в ответе has_api_key=true,
 // сам ключ не возвращается.
@@ -26,7 +59,7 @@ func TestCreateModelWithAPIKey(t *testing.T) {
 		`"api_key":"sk-test-secret-12345"}`
 	post := httptest.NewRequest(http.MethodPost, "/api/models",
 		bytes.NewBufferString(body))
-	post.Header.Set("Authorization", userToken())
+	post.Header.Set("Authorization", adminToken())
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, post)
 	if rec.Code != http.StatusCreated {
@@ -53,7 +86,7 @@ func TestCreateModelWithoutAPIKey(t *testing.T) {
 		`"adapter":"openai_compatible","endpoint":"http://llm.local"}`
 	post := httptest.NewRequest(http.MethodPost, "/api/models",
 		bytes.NewBufferString(body))
-	post.Header.Set("Authorization", userToken())
+	post.Header.Set("Authorization", adminToken())
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, post)
 	if rec.Code != http.StatusCreated {
@@ -76,7 +109,7 @@ func TestUpdateModelAPIKey(t *testing.T) {
 		`"adapter":"openai_compatible","endpoint":"http://llm.local"}`
 	post := httptest.NewRequest(http.MethodPost, "/api/models",
 		bytes.NewBufferString(body))
-	post.Header.Set("Authorization", userToken())
+	post.Header.Set("Authorization", adminToken())
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, post)
 	if rec.Code != http.StatusCreated {
@@ -92,7 +125,7 @@ func TestUpdateModelAPIKey(t *testing.T) {
 	upd := httptest.NewRequest(http.MethodPost,
 		"/api/models/"+dto.ID+"/api-key",
 		bytes.NewBufferString(`{"api_key":"new-secret-99"}`))
-	upd.Header.Set("Authorization", userToken())
+	upd.Header.Set("Authorization", adminToken())
 	rec2 := httptest.NewRecorder()
 	router.ServeHTTP(rec2, upd)
 	if rec2.Code != http.StatusNoContent {
@@ -101,7 +134,7 @@ func TestUpdateModelAPIKey(t *testing.T) {
 
 	// GET /api/models — has_api_key теперь true.
 	getReq := httptest.NewRequest(http.MethodGet, "/api/models", nil)
-	getReq.Header.Set("Authorization", userToken())
+	getReq.Header.Set("Authorization", adminToken())
 	rec3 := httptest.NewRecorder()
 	router.ServeHTTP(rec3, getReq)
 	var list []modelProviderDTO
@@ -135,7 +168,7 @@ func TestUpdateModelAPIKeyEmptyClears(t *testing.T) {
 		`"api_key":"initial"}`
 	post := httptest.NewRequest(http.MethodPost, "/api/models",
 		bytes.NewBufferString(body))
-	post.Header.Set("Authorization", userToken())
+	post.Header.Set("Authorization", adminToken())
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, post)
 	var dto modelProviderDTO
@@ -145,7 +178,7 @@ func TestUpdateModelAPIKeyEmptyClears(t *testing.T) {
 	upd := httptest.NewRequest(http.MethodPost,
 		"/api/models/"+dto.ID+"/api-key",
 		bytes.NewBufferString(`{"api_key":""}`))
-	upd.Header.Set("Authorization", userToken())
+	upd.Header.Set("Authorization", adminToken())
 	rec2 := httptest.NewRecorder()
 	router.ServeHTTP(rec2, upd)
 	if rec2.Code != http.StatusNoContent {

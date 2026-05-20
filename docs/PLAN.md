@@ -157,11 +157,26 @@
   расширение `storage/models.go` (`APIKeyEncrypted`,
   `UpdateModelProviderAPIKey`, `GetModelProvider`, `HasAPIKey()`,
   `LogValue()`); расширение `api/models.go` (`createModelHandler`
-  с `cipher`, новый `updateModelAPIKeyHandler`); main.go `buildRouter`
-  использует per-provider key с fallback на env.
-- **Тесты:** TestCreateModelWithAPIKey/WithoutAPIKey, TestUpdateModelAPIKey/
-  EmptyClears, TestModelsResponseDoesNotLeakApiKey (расширен).
-- **Самооценка:** 10/10 — техдолг полностью закрыт; все 10 пакетов green.
+  с `cipher` + RBAC, новый `updateModelAPIKeyHandler`);
+  main.go `buildRouter` использует per-provider key с fallback на env.
+- **Архитектор:** ревью 1 — 8.5/10 НА ДОРАБОТКУ (MAJOR-1 RBAC, MAJOR-2
+  silent-fallback, MINOR-1 AAD по name); доводка:
+  - **RBAC**: POST `/api/models` и POST `/api/models/:id/api-key`
+    требуют admin/developer (auth.RoleAdmin/RoleDeveloper) — user
+    → 403.
+  - **fail-closed fallback**: `resolveProviderKey` при ошибке
+    Decrypt НЕ маскирует мисконфиг env-ключом, а **возвращает (",
+    false)** — провайдер не регистрируется в router (пропускается).
+    Это правильный fail-closed: лучше «провайдер недоступен» чем
+    «провайдер работает с непредсказуемым ключом».
+  - **AAD = id (UUID)** вместо name — иммутабельный, не ломается
+    при rename. CREATE использует 2-фазный flow: INSERT (без ключа)
+    → RETURNING id → Encrypt(plaintext, AAD=id) → UPDATE.
+- **Тесты:** TestCreateModelForbiddenForUser, TestUpdateAPIKey-
+  ForbiddenForUser, TestCreateModelWithAPIKey/WithoutAPIKey,
+  TestUpdateModelAPIKey/EmptyClears, TestModelsResponseDoesNotLeakApiKey.
+- **Самооценка после доводки:** 9.7/10 — все 3 замечания ревью закрыты;
+  все 10 пакетов green с -race.
 
 ### ~~Итерация 9 — Go: Audit / Incidents / шифрованные mappings / история~~ ✅ Принято 9.75/10
 

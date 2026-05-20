@@ -33,6 +33,12 @@ func userToken() string {
 	return "Bearer " + auth.IssueToken(auth.RoleUser, apiTestSecret)
 }
 
+// adminToken — RBAC-токен admin'а; нужен для модификации провайдеров
+// и других security-критичных операций (Итерация 9.5 RBAC).
+func adminToken() string {
+	return "Bearer " + auth.IssueToken(auth.RoleAdmin, apiTestSecret)
+}
+
 func TestPolicyTestEndpointRequiresAuth(t *testing.T) {
 	rec := httptest.NewRecorder()
 	apiTestRouter().ServeHTTP(rec, httptest.NewRequest(
