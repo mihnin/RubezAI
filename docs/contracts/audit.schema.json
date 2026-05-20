@@ -27,7 +27,14 @@
         "incident_create_failed",
         "audit_exported",
         "auth_login",
-        "auth_login_failed"
+        "auth_login_failed",
+        "document_uploaded",
+        "document_processing_started",
+        "document_processing_completed",
+        "document_processing_failed",
+        "document_downloaded",
+        "document_deleted",
+        "document_retry_requested"
       ]
     },
     "AuditRiskLevel": {
