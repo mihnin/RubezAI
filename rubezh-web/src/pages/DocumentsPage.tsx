@@ -83,21 +83,23 @@ export default function DocumentsPage() {
                 </td>
               </tr>
             )}
-            {!isLoading && (data?.items?.length ?? 0) === 0 && (
+            {!isLoading && (data?.documents?.length ?? 0) === 0 && (
               <tr>
                 <td colSpan={4} className="p-6 text-center text-slate-500">
                   Документов пока нет
                 </td>
               </tr>
             )}
-            {data?.items?.map((d: DocItem) => (
+            {data?.documents?.map((d: DocItem) => (
               <tr key={d.id} className="border-t border-slate-800">
                 <td className="p-3 truncate max-w-xs">{d.filename}</td>
                 <td className="p-3">
                   <StatusBadge status={d.status} />
                 </td>
                 <td className="p-3 text-right text-slate-400">
-                  {(d.size_bytes / 1024).toFixed(1)} KB
+                  {d.size_bytes !== null
+                    ? `${(d.size_bytes / 1024).toFixed(1)} KB`
+                    : "—"}
                 </td>
                 <td className="p-3 text-right">
                   <button

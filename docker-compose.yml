@@ -104,6 +104,12 @@ services:
       POSTGRES_PORT: "5432"
       AUTH_DEV_TOKEN_SECRET: ${AUTH_DEV_TOKEN_SECRET:-change_me_dev_only}
       SANITIZER_URL: http://rubezh-sanitizer:8001
+      MAPPING_ENCRYPTION_KEY: ${MAPPING_ENCRYPTION_KEY:?MAPPING_ENCRYPTION_KEY обязателен (base64 32 байта)}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-rubezh}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-rubezh-minio}
+      MINIO_BUCKET: ${MINIO_BUCKET:-rubezh-documents}
+      MINIO_SECURE: "false"
     ports:
       - "${API_PORT:-8080}:8080"
     depends_on:

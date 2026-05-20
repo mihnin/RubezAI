@@ -1,15 +1,19 @@
 import { useState, useRef, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { streamChat } from "../api/sse";
-import type { ChatEvent, ChatEntity } from "../api/schemas";
+import { apiFetch } from "../api/client";
+import { ModelListSchema, type ChatEvent } from "../api/schemas";
 
 interface Message {
   role: "user" | "assistant";
   content: string;
   decision?: string;
-  entities?: ChatEntity[];
+  reasons?: string[];
 }
 
-/** ChatPage (Итерация 13). SSE-стрим через /api/chat по chat.schema.json. */
+/** ChatPage (Итерация 13).
+ *  Реальный SSE-формат — event: meta/delta/done/error (RFC 6202),
+ *  см. rubezh-api/internal/api/chat.go и chat.schema.json. */
 export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -18,6 +22,14 @@ export default function ChatPage() {
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  // Выбираем первого активного провайдера автоматически (MVP). После MVP —
+  // селектор в UI с памятью выбора в localStorage.
+  const { data: models } = useQuery({
+    queryKey: ["models"],
+    queryFn: () => apiFetch("/api/models", ModelListSchema),
+  });
+  const activeProvider = models?.find((m) => m.is_enabled);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
@@ -32,6 +44,12 @@ export default function ChatPage() {
 
   async function send() {
     if (!input.trim() || streaming) return;
+    if (!activeProvider) {
+      setError(
+        "Нет активных LLM-провайдеров. Откройте раздел «Модели» и создайте провайдера.",
+      );
+      return;
+    }
     const userMsg: Message = { role: "user", content: input };
     setMessages((m) => [...m, userMsg, { role: "assistant", content: "" }]);
     setInput("");
@@ -43,10 +61,9 @@ export default function ChatPage() {
     try {
       await streamChat({
         sessionId,
-        messages: [...messages, userMsg].map((m) => ({
-          role: m.role,
-          content: m.content,
-        })),
+        message: userMsg.content,
+        provider: activeProvider.name,
+        model: activeProvider.name,
         signal: ctrl.signal,
         onEvent: (ev) => applyEvent(ev, setMessages, setError),
       });
@@ -66,6 +83,11 @@ export default function ChatPage() {
         <h1 className="text-lg font-semibold">Чат</h1>
         <p className="text-xs text-slate-500">
           Сессия: <span data-testid="session-id">{sessionId.slice(0, 8)}</span>
+          {activeProvider && (
+            <span className="ml-3">
+              Провайдер: <strong>{activeProvider.name}</strong>
+            </span>
+          )}
         </p>
       </header>
       <div ref={scrollRef} className="flex-1 overflow-auto p-4 space-y-3">
@@ -104,7 +126,7 @@ export default function ChatPage() {
         />
         <button
           onClick={send}
-          disabled={streaming || !input.trim()}
+          disabled={streaming || !input.trim() || !activeProvider}
           className="px-4 rounded bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-medium disabled:opacity-40"
         >
           {streaming ? "…" : "→"}
@@ -120,13 +142,14 @@ function applyEvent(
   setError: React.Dispatch<React.SetStateAction<string | null>>,
 ): void {
   if (ev.type === "delta") {
-    setMessages((m) => appendDelta(m, ev.text));
-  } else if (ev.type === "decision") {
-    setMessages((m) => annotateLast(m, ev.decision, ev.entities));
+    setMessages((m) => appendDelta(m, ev.payload.content));
+  } else if (ev.type === "meta") {
+    setMessages((m) =>
+      annotateLast(m, ev.payload.decision, ev.payload.reasons),
+    );
   } else if (ev.type === "error") {
-    setError(ev.message);
+    setError(`${ev.payload.message} (req=${ev.payload.request_id})`);
   }
-  // ev.type === "done" — стрим завершается естественно через reader.done
 }
 
 function appendDelta(list: Message[], delta: string): Message[] {
@@ -138,11 +161,11 @@ function appendDelta(list: Message[], delta: string): Message[] {
 function annotateLast(
   list: Message[],
   decision: string,
-  entities: ChatEntity[],
+  reasons: string[],
 ): Message[] {
   const last = list[list.length - 1];
   if (!last) return list;
-  return [...list.slice(0, -1), { ...last, decision, entities }];
+  return [...list.slice(0, -1), { ...last, decision, reasons }];
 }
 
 function MessageBubble({ message }: { message: Message }) {
@@ -165,8 +188,8 @@ function MessageBubble({ message }: { message: Message }) {
             data-testid="decision-banner"
           >
             ⚠ Решение: <strong>{message.decision}</strong>
-            {message.entities && message.entities.length > 0 && (
-              <span> · Обезличено: {message.entities.length}</span>
+            {message.reasons && message.reasons.length > 0 && (
+              <span> · {message.reasons.join(", ")}</span>
             )}
           </div>
         )}

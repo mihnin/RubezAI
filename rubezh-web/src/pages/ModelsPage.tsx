@@ -4,7 +4,8 @@ import { apiFetch, apiFetchRaw } from "../api/client";
 import { useAuth } from "../auth/context";
 import { ModelListSchema, type Model } from "../api/schemas";
 
-/** ModelsPage (Итерация 15). admin/security_officer пишет; user читает. */
+/** ModelsPage (Итерация 15). admin/security_officer пишет; user читает.
+ *  Контракт — modelProviderDTO (rubezh-api/internal/api/models.go). */
 export default function ModelsPage() {
   const qc = useQueryClient();
   const { user } = useAuth();
@@ -34,10 +35,10 @@ export default function ModelsPage() {
       {isLoading && <div className="text-slate-500">Загрузка…</div>}
 
       <div className="space-y-3">
-        {data?.items?.map((m) => (
+        {data?.map((m: Model) => (
           <ModelRow key={m.id} model={m} canWrite={canWrite} />
         ))}
-        {!isLoading && (data?.items?.length ?? 0) === 0 && (
+        {!isLoading && (data?.length ?? 0) === 0 && (
           <div className="text-slate-500">Провайдеры не настроены</div>
         )}
       </div>
@@ -63,7 +64,7 @@ function ModelRow({ model, canWrite }: { model: Model; canWrite: boolean }) {
   const updMut = useMutation({
     mutationFn: () =>
       apiFetchRaw(`/api/models/${model.id}/api-key`, {
-        method: "PUT",
+        method: "POST",
         body: JSON.stringify({ api_key: newKey }),
       }),
     onSuccess: () => {
@@ -78,21 +79,33 @@ function ModelRow({ model, canWrite }: { model: Model; canWrite: boolean }) {
       <div className="flex items-center justify-between mb-2">
         <h3 className="font-medium">{model.name}</h3>
         <div className="flex gap-2">
-          {model.trusted_local && (
-            <span className="text-xs px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300">
-              trusted_local
-            </span>
-          )}
+          <span
+            className={`text-xs px-2 py-0.5 rounded ${
+              model.trust_level === "trusted_local"
+                ? "bg-emerald-500/20 text-emerald-300"
+                : "bg-slate-700 text-slate-300"
+            }`}
+          >
+            {model.trust_level}
+          </span>
           {model.has_api_key && (
             <span className="text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-300">
               api_key set
             </span>
           )}
+          {!model.is_enabled && (
+            <span className="text-xs px-2 py-0.5 rounded bg-red-500/20 text-red-300">
+              disabled
+            </span>
+          )}
         </div>
       </div>
       <div className="text-sm text-slate-400 space-y-0.5">
-        <div>Тип: {model.provider_type}</div>
-        <div className="truncate">URL: {model.base_url}</div>
+        <div>Adapter: {model.adapter}</div>
+        <div className="truncate">Endpoint: {model.endpoint}</div>
+        {model.max_tokens !== null && (
+          <div>max_tokens: {model.max_tokens}</div>
+        )}
       </div>
       {canWrite && (
         <div className="mt-3 pt-3 border-t border-slate-800">
@@ -136,6 +149,14 @@ function ModelRow({ model, canWrite }: { model: Model; canWrite: boolean }) {
   );
 }
 
+interface ModelForm {
+  name: string;
+  trust_level: string;
+  adapter: string;
+  endpoint: string;
+  api_key: string;
+}
+
 function CreateModelModal({
   onClose,
   onCreated,
@@ -143,17 +164,27 @@ function CreateModelModal({
   onClose: () => void;
   onCreated: () => void;
 }) {
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<ModelForm>({
     name: "",
-    provider_type: "openai",
-    base_url: "",
+    trust_level: "external",
+    adapter: "openai",
+    endpoint: "",
     api_key: "",
-    trusted_local: false,
   });
   const [err, setErr] = useState<string | null>(null);
 
   const mut = useMutation({
-    mutationFn: () => apiFetchRaw("/api/models", { method: "POST", body: JSON.stringify(form) }),
+    mutationFn: () =>
+      apiFetchRaw("/api/models", {
+        method: "POST",
+        body: JSON.stringify({
+          name: form.name,
+          trust_level: form.trust_level,
+          adapter: form.adapter,
+          endpoint: form.endpoint,
+          api_key: form.api_key || null,
+        }),
+      }),
     onSuccess: onCreated,
     onError: (e: Error) => setErr(e.message),
   });
@@ -176,27 +207,38 @@ function CreateModelModal({
               className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1"
             />
           </Field>
-          <Field label="Тип">
+          <Field label="Trust level">
             <select
-              value={form.provider_type}
+              value={form.trust_level}
               onChange={(e) =>
-                setForm({ ...form, provider_type: e.target.value })
+                setForm({ ...form, trust_level: e.target.value })
               }
+              className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1"
+            >
+              <option value="external">external</option>
+              <option value="trusted_local">trusted_local</option>
+              <option value="internal">internal</option>
+            </select>
+          </Field>
+          <Field label="Adapter">
+            <select
+              value={form.adapter}
+              onChange={(e) => setForm({ ...form, adapter: e.target.value })}
               className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1"
             >
               <option value="openai">openai</option>
               <option value="mock">mock</option>
             </select>
           </Field>
-          <Field label="Base URL">
+          <Field label="Endpoint">
             <input
-              value={form.base_url}
-              onChange={(e) => setForm({ ...form, base_url: e.target.value })}
+              value={form.endpoint}
+              onChange={(e) => setForm({ ...form, endpoint: e.target.value })}
               placeholder="http://localhost:1234/v1"
               className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1"
             />
           </Field>
-          <Field label="API key">
+          <Field label="API key (опционально)">
             <input
               type="password"
               value={form.api_key}
@@ -204,16 +246,6 @@ function CreateModelModal({
               className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1"
             />
           </Field>
-          <label className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={form.trusted_local}
-              onChange={(e) =>
-                setForm({ ...form, trusted_local: e.target.checked })
-              }
-            />
-            trusted_local (можно отправлять raw)
-          </label>
           {err && <div className="text-red-300 text-xs">{err}</div>}
         </div>
         <div className="flex gap-2 mt-6 justify-end">
@@ -222,7 +254,7 @@ function CreateModelModal({
           </button>
           <button
             onClick={() => mut.mutate()}
-            disabled={mut.isPending || !form.name || !form.base_url}
+            disabled={mut.isPending || !form.name || !form.endpoint}
             className="px-3 py-1.5 text-sm rounded bg-cyan-500 text-slate-950 disabled:opacity-40"
           >
             Создать

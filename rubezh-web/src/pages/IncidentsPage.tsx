@@ -16,10 +16,11 @@ const STATUS_NEXT: Record<string, string[]> = {
   closed: [],
 };
 
-/** IncidentsPage (Итерация 15). docs/design/ui/incidents.md. */
+/** IncidentsPage (Итерация 15). Контракт — incidentDTO
+ *  (rubezh-api/internal/api/incidents.go: incidents + next_cursor). */
 export default function IncidentsPage() {
   const [status, setStatus] = useState("");
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ["incidents", status],
     queryFn: () =>
       apiFetch(
@@ -47,10 +48,15 @@ export default function IncidentsPage() {
 
       <div className="space-y-2">
         {isLoading && <div className="text-slate-500">Загрузка…</div>}
-        {data?.items?.map((i) => (
+        {error && (
+          <div role="alert" className="text-sm text-red-300">
+            {(error as Error).message}
+          </div>
+        )}
+        {data?.incidents?.map((i: Incident) => (
           <IncidentCard key={i.id} inc={i} />
         ))}
-        {!isLoading && (data?.items?.length ?? 0) === 0 && (
+        {!isLoading && (data?.incidents?.length ?? 0) === 0 && (
           <div className="text-slate-500">Инцидентов нет</div>
         )}
       </div>
@@ -62,11 +68,13 @@ function IncidentCard({ inc }: { inc: Incident }) {
   const qc = useQueryClient();
   const [err, setErr] = useState<string | null>(null);
 
+  // MVP: optimistic concurrency через If-Match не используется, т.к. backend DTO
+  // не возвращает etag-поле в JSON (ETag должен браться из response-header — техдолг F1).
+  // PATCH без If-Match. При коллизии — последний writer выигрывает.
   const patchMut = useMutation({
     mutationFn: (status: string) =>
       apiFetchRaw(`/api/incidents/${inc.id}`, {
         method: "PATCH",
-        headers: { "If-Match": inc.etag },
         body: JSON.stringify({ status }),
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["incidents"] }),
@@ -80,7 +88,9 @@ function IncidentCard({ inc }: { inc: Incident }) {
       <div className="flex items-start justify-between mb-2 gap-3">
         <div className="flex-1">
           <h3 className="font-medium">{inc.title}</h3>
-          <p className="text-sm text-slate-400 mt-1">{inc.description}</p>
+          {inc.summary && (
+            <p className="text-sm text-slate-400 mt-1">{inc.summary}</p>
+          )}
         </div>
         <div className="flex flex-col items-end gap-1">
           <span
@@ -94,16 +104,15 @@ function IncidentCard({ inc }: { inc: Incident }) {
         </div>
       </div>
       <div className="text-xs text-slate-500 flex gap-4 mt-2">
-        <span>тип: {inc.event_type}</span>
+        {inc.trigger && <span>trigger: {inc.trigger}</span>}
         <span>{new Date(inc.created_at).toLocaleString("ru-RU")}</span>
         {inc.reporter_id === null && (
           <span className="text-amber-400">auto</span>
         )}
       </div>
       {err && (
-        <div className="mt-2 text-xs text-red-300">
+        <div className="mt-2 text-xs text-red-300" role="alert">
           {err}
-          {err.includes("412") && " (запись изменена — обновите страницу)"}
         </div>
       )}
       {nextStatuses.length > 0 && (

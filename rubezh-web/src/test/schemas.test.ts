@@ -1,100 +1,141 @@
 import { describe, it, expect } from "vitest";
 import {
-  ChatEventSchema,
+  ChatMetaPayloadSchema,
+  ChatDeltaPayloadSchema,
   DocumentListSchema,
   IncidentSchema,
+  PolicyListSchema,
+  ModelListSchema,
+  AuditListSchema,
   DevLoginResponseSchema,
 } from "../api/schemas";
 
-describe("Zod-схемы контрактов API", () => {
-  it("парсит delta-событие чата", () => {
-    expect(
-      ChatEventSchema.parse({ type: "delta", text: "Привет" }),
-    ).toEqual({ type: "delta", text: "Привет" });
+describe("Zod-схемы контрактов API (сверены с rubezh-api DTO)", () => {
+  it("chat meta: парсит decision/risk/provider/reasons/request_id", () => {
+    const m = ChatMetaPayloadSchema.parse({
+      decision: "allow_masked",
+      risk: { level: "medium", score: 0.5, classes: ["PII"] },
+      provider: "mock",
+      reasons: ["match:phone"],
+      request_id: "req-1",
+    });
+    expect(m.decision).toBe("allow_masked");
+    expect(m.risk.classes).toEqual(["PII"]);
   });
 
-  it("парсит decision-событие с пустыми entities", () => {
-    const ev = ChatEventSchema.parse({
-      type: "decision",
-      decision: "allow_masked",
-    });
-    expect(ev).toEqual({
-      type: "decision",
-      decision: "allow_masked",
-      entities: [],
+  it("chat delta: только content", () => {
+    expect(ChatDeltaPayloadSchema.parse({ content: "Hi" })).toEqual({
+      content: "Hi",
     });
   });
 
-  it("отклоняет invalid decision", () => {
+  it("chat delta: отклоняет невалидный payload", () => {
     expect(() =>
-      ChatEventSchema.parse({ type: "decision", decision: "bogus" }),
+      ChatDeltaPayloadSchema.parse({ text: "wrong-field" }),
     ).toThrow();
   });
 
-  it("парсит decision с entities", () => {
-    const ev = ChatEventSchema.parse({
-      type: "decision",
-      decision: "deny",
-      entities: [{ type: "PHONE", pseudonym: "ТЕЛЕФОН_001" }],
-    });
-    if (ev.type !== "decision") throw new Error("ожидалось decision");
-    expect(ev.entities).toHaveLength(1);
-  });
-
-  it("парсит список документов с null-cursor", () => {
+  it("документы: {documents: [...]} с nullable size_bytes", () => {
     const list = DocumentListSchema.parse({
-      items: [
+      documents: [
         {
           id: "11111111-1111-1111-1111-111111111111",
+          owner_id: "22222222-2222-2222-2222-222222222222",
           filename: "test.pdf",
+          content_type: "application/pdf",
+          size_bytes: null,
           status: "done",
-          size_bytes: 1024,
+          phase: null,
+          error: null,
+          processing_attempts: 0,
+          processing_started_at: null,
           created_at: "2026-05-20T10:00:00Z",
+          updated_at: "2026-05-20T10:00:00Z",
+        },
+      ],
+    });
+    expect(list.documents[0].size_bytes).toBeNull();
+  });
+
+  it("политики: голый массив, поле is_active", () => {
+    const list = PolicyListSchema.parse([
+      {
+        id: "11111111-1111-1111-1111-111111111111",
+        name: "PII default",
+        description: "d",
+        is_active: true,
+        current_version: 1,
+        created_at: "2026-05-20T10:00:00Z",
+        updated_at: "2026-05-20T10:00:00Z",
+      },
+    ]);
+    expect(list[0].is_active).toBe(true);
+  });
+
+  it("модели: голый массив, поля adapter/endpoint/trust_level", () => {
+    const list = ModelListSchema.parse([
+      {
+        id: "11111111-1111-1111-1111-111111111111",
+        name: "m",
+        trust_level: "trusted_local",
+        adapter: "openai",
+        endpoint: "http://localhost:1234/v1",
+        max_tokens: null,
+        rate_limit_per_min: null,
+        is_enabled: true,
+        has_api_key: false,
+        created_at: "2026-05-20T10:00:00Z",
+        updated_at: "2026-05-20T10:00:00Z",
+      },
+    ]);
+    expect(list[0].adapter).toBe("openai");
+  });
+
+  it("аудит: {events: [...], next_cursor}", () => {
+    const list = AuditListSchema.parse({
+      events: [
+        {
+          id: "11111111-1111-1111-1111-111111111111",
+          created_at: "2026-05-20T10:00:00Z",
+          user_id: "22222222-2222-2222-2222-222222222222",
+          event_type: "chat_request_received",
+          model_provider_id: null,
+          risk_level: "low",
+          risk_classes: ["PII"],
+          policy_decision: "allow_masked",
+          request_id: null,
+          has_leak: false,
         },
       ],
       next_cursor: null,
     });
-    expect(list.items[0].status).toBe("done");
+    expect(list.events[0].risk_classes).toEqual(["PII"]);
   });
 
-  it("отклоняет invalid status документа", () => {
-    expect(() =>
-      DocumentListSchema.parse({
-        items: [
-          {
-            id: "11111111-1111-1111-1111-111111111111",
-            filename: "f",
-            status: "weird",
-            size_bytes: 0,
-            created_at: "2026-05-20T10:00:00Z",
-          },
-        ],
-        next_cursor: null,
-      }),
-    ).toThrow();
-  });
-
-  it("парсит инцидент со всеми обязательными полями", () => {
+  it("инциденты: title/summary/trigger, без description/etag", () => {
     const inc = IncidentSchema.parse({
       id: "11111111-1111-1111-1111-111111111111",
-      severity: "high",
-      status: "open",
-      title: "t",
-      description: "d",
-      event_type: "chat",
       audit_event_id: null,
+      user_id: null,
       reporter_id: null,
       assignee_id: null,
-      created_at: "2026-05-20T10:00:00Z",
+      severity: "high",
+      status: "open",
+      trigger: "chat",
+      title: "t",
+      summary: null,
+      resolution: null,
       closed_at: null,
-      etag: "\"abc\"",
+      created_at: "2026-05-20T10:00:00Z",
+      updated_at: "2026-05-20T10:00:00Z",
     });
     expect(inc.severity).toBe("high");
+    expect(inc.summary).toBeNull();
   });
 
   it("парсит ответ dev-login", () => {
     const out = DevLoginResponseSchema.parse({
-      token: "tok",
+      token: "user.abc",
       role: "user",
       user_id: "uid",
       expires_at: "2026-05-21T10:00:00Z",

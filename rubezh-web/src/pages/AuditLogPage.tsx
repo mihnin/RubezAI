@@ -3,12 +3,13 @@ import { useState } from "react";
 import { apiFetch, apiDownload, ApiError } from "../api/client";
 import { AuditListSchema, type AuditEvent } from "../api/schemas";
 
-/** AuditLogPage (Итерация 15). docs/design/ui/audit-log.md. */
+/** AuditLogPage (Итерация 15). Контракт — auditEventSummaryDTO
+ *  (rubezh-api/internal/api/audit.go: events + next_cursor). */
 export default function AuditLogPage() {
   const [filter, setFilter] = useState("");
   const [exportError, setExportError] = useState<string | null>(null);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ["audit", filter],
     queryFn: () =>
       apiFetch(
@@ -60,6 +61,11 @@ export default function AuditLogPage() {
           {exportError}
         </div>
       )}
+      {error && (
+        <div role="alert" className="mb-2 text-xs text-red-300">
+          {(error as Error).message}
+        </div>
+      )}
 
       <div className="bg-slate-900 border border-slate-700 rounded-lg overflow-hidden">
         <table className="w-full text-sm">
@@ -68,36 +74,61 @@ export default function AuditLogPage() {
               <th className="p-2 text-left">Время</th>
               <th className="p-2 text-left">Тип</th>
               <th className="p-2 text-left">Пользователь</th>
-              <th className="p-2 text-left">Detail (masked)</th>
+              <th className="p-2 text-left">Risk</th>
+              <th className="p-2 text-left">Decision</th>
+              <th className="p-2 text-left">Leak</th>
             </tr>
           </thead>
           <tbody>
             {isLoading && (
               <tr>
-                <td colSpan={4} className="p-6 text-center text-slate-500">
+                <td colSpan={6} className="p-6 text-center text-slate-500">
                   Загрузка…
                 </td>
               </tr>
             )}
-            {data?.items?.map((e: AuditEvent) => (
+            {data?.events?.map((e: AuditEvent) => (
               <tr key={e.id} className="border-t border-slate-800 hover:bg-slate-800/30">
                 <td className="p-2 text-slate-400 whitespace-nowrap text-xs">
                   {new Date(e.created_at).toLocaleString("ru-RU")}
                 </td>
                 <td className="p-2 text-cyan-300 text-xs">{e.event_type}</td>
                 <td className="p-2 text-slate-400 text-xs">
-                  {e.user_id?.slice(0, 8) ?? "—"}
+                  {e.user_id.slice(0, 8)}
                 </td>
-                <td className="p-2">
-                  <pre className="text-xs text-slate-400 max-w-md truncate">
-                    {JSON.stringify(e.detail)}
-                  </pre>
+                <td className="p-2 text-xs text-slate-300">
+                  {e.risk_level ?? "—"}
+                </td>
+                <td className="p-2 text-xs">
+                  {e.policy_decision ? (
+                    <span
+                      className={
+                        e.policy_decision === "deny" ||
+                        e.policy_decision === "escalate"
+                          ? "text-red-300"
+                          : e.policy_decision === "allow_masked"
+                            ? "text-amber-300"
+                            : "text-slate-300"
+                      }
+                    >
+                      {e.policy_decision}
+                    </span>
+                  ) : (
+                    "—"
+                  )}
+                </td>
+                <td className="p-2 text-xs">
+                  {e.has_leak ? (
+                    <span className="text-red-300">⚠</span>
+                  ) : (
+                    <span className="text-slate-500">—</span>
+                  )}
                 </td>
               </tr>
             ))}
-            {!isLoading && (data?.items?.length ?? 0) === 0 && (
+            {!isLoading && (data?.events?.length ?? 0) === 0 && (
               <tr>
-                <td colSpan={4} className="p-6 text-center text-slate-500">
+                <td colSpan={6} className="p-6 text-center text-slate-500">
                   Событий не найдено
                 </td>
               </tr>

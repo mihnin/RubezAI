@@ -1,39 +1,53 @@
-import { ChatEventSchema, type ChatEvent } from "./schemas";
+import {
+  ChatMetaPayloadSchema,
+  ChatDeltaPayloadSchema,
+  ChatDonePayloadSchema,
+  ChatErrorPayloadSchema,
+  type ChatEvent,
+} from "./schemas";
 
 /**
  * SSE-клиент для /api/chat. Использует fetch+ReadableStream
  * (EventSource не поддерживает кастомные заголовки → нельзя Bearer).
  *
- * Поток событий парсится по RFC 6202 (data: ...\n\n) и валидируется
- * Zod-схемой. Невалидные события игнорируются (на боевом контракте
- * этого не должно быть; защита от мисматча версии).
+ * Формат backend (rubezh-api/internal/api/chat.go: writeEvent):
+ *   event: meta|delta|done|error
+ *   data: {...json...}
+ *   (пустая строка-разделитель)
+ *
+ * Каждое событие парсится с учётом event-name + Zod-валидации payload
+ * по соответствующей схеме. Невалидные events игнорируются.
  */
 
 const STORAGE_TOKEN = "rubezh.auth.token";
 
 export interface ChatStreamOptions {
-  sessionId: string;
-  messages: Array<{ role: "user" | "assistant"; content: string }>;
+  sessionId?: string;
+  message: string;
+  provider: string;
+  model: string;
   onEvent: (event: ChatEvent) => void;
   signal?: AbortSignal;
 }
 
-export async function streamChat({
-  sessionId,
-  messages,
-  onEvent,
-  signal,
-}: ChatStreamOptions): Promise<void> {
+export async function streamChat(opts: ChatStreamOptions): Promise<void> {
   const token = localStorage.getItem(STORAGE_TOKEN);
+  const body: Record<string, unknown> = {
+    message: opts.message,
+    provider: opts.provider,
+    model: opts.model,
+  };
+  if (opts.sessionId) body.session_id = opts.sessionId;
+
   const resp = await fetch("/api/chat", {
     method: "POST",
-    signal,
+    signal: opts.signal,
     headers: {
       "Content-Type": "application/json",
       Authorization: token ? `Bearer ${token}` : "",
       Accept: "text/event-stream",
     },
-    body: JSON.stringify({ session_id: sessionId, messages }),
+    body: JSON.stringify(body),
   });
 
   if (!resp.ok || !resp.body) {
@@ -52,18 +66,40 @@ export async function streamChat({
     const blocks = buf.split("\n\n");
     buf = blocks.pop() ?? "";
     for (const block of blocks) {
-      dispatchBlock(block, onEvent);
+      const ev = parseBlock(block);
+      if (ev) opts.onEvent(ev);
     }
   }
 }
 
-function dispatchBlock(block: string, onEvent: (e: ChatEvent) => void): void {
+function parseBlock(block: string): ChatEvent | null {
+  let name = "";
+  let dataLine = "";
   for (const ln of block.split("\n")) {
-    if (!ln.startsWith("data: ")) continue;
-    const payload = ln.slice(6);
-    const parsed = ChatEventSchema.safeParse(safeJson(payload));
-    if (parsed.success) onEvent(parsed.data);
+    if (ln.startsWith("event: ")) name = ln.slice(7).trim();
+    else if (ln.startsWith("data: ")) dataLine = ln.slice(6);
   }
+  if (!name || !dataLine) return null;
+  const json = safeJson(dataLine);
+  if (json === null) return null;
+
+  if (name === "meta") {
+    const r = ChatMetaPayloadSchema.safeParse(json);
+    return r.success ? { type: "meta", payload: r.data } : null;
+  }
+  if (name === "delta") {
+    const r = ChatDeltaPayloadSchema.safeParse(json);
+    return r.success ? { type: "delta", payload: r.data } : null;
+  }
+  if (name === "done") {
+    const r = ChatDonePayloadSchema.safeParse(json);
+    return r.success ? { type: "done", payload: r.data } : null;
+  }
+  if (name === "error") {
+    const r = ChatErrorPayloadSchema.safeParse(json);
+    return r.success ? { type: "error", payload: r.data } : null;
+  }
+  return null;
 }
 
 function safeJson(s: string): unknown {

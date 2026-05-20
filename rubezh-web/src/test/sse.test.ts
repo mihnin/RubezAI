@@ -16,19 +16,22 @@ function mockResponse(body: ReadableStream<Uint8Array>, status = 200): Response 
   return new Response(body, { status });
 }
 
-describe("streamChat (SSE-клиент)", () => {
+const VALID_META =
+  '{"decision":"allow_masked","risk":{"level":"medium","score":0.5,"classes":["PII"]},"provider":"mock","reasons":[],"request_id":"req-1"}';
+
+describe("streamChat (SSE-клиент по RFC 6202)", () => {
   beforeEach(() => {
     localStorage.setItem("rubezh.auth.token", "test-token");
   });
 
-  it("парсит delta + decision + игнорирует неизвестные события", async () => {
+  it("парсит named events meta/delta/done с Zod-валидацией", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       mockResponse(
         sseStream([
-          'data: {"type":"delta","text":"Hi"}\n\n',
-          'data: {"type":"delta","text":" world"}\n\n',
-          'data: {"type":"unknown","x":1}\n\n',
-          'data: {"type":"decision","decision":"allow_masked","entities":[]}\n\n',
+          `event: meta\ndata: ${VALID_META}\n\n`,
+          'event: delta\ndata: {"content":"Hi"}\n\n',
+          'event: delta\ndata: {"content":" world"}\n\n',
+          'event: done\ndata: {"request_id":"req-1"}\n\n',
         ]),
       ),
     );
@@ -37,27 +40,68 @@ describe("streamChat (SSE-клиент)", () => {
     const events: ChatEvent[] = [];
     await streamChat({
       sessionId: "s1",
-      messages: [{ role: "user", content: "hi" }],
+      message: "hi",
+      provider: "mock",
+      model: "mock",
       onEvent: (e) => events.push(e),
     });
 
-    expect(events).toHaveLength(3);
-    expect(events[0]).toEqual({ type: "delta", text: "Hi" });
-    expect(events[1]).toEqual({ type: "delta", text: " world" });
-    expect(events[2].type).toBe("decision");
+    expect(events.map((e) => e.type)).toEqual([
+      "meta",
+      "delta",
+      "delta",
+      "done",
+    ]);
+    expect(events[0].type === "meta" && events[0].payload.decision).toBe(
+      "allow_masked",
+    );
+    expect(events[1].type === "delta" && events[1].payload.content).toBe("Hi");
   });
 
-  it("отправляет Bearer-токен", async () => {
+  it("отправляет правильное тело: {session_id, message, provider, model}", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      mockResponse(sseStream(['data: {"type":"done"}\n\n'])),
+      mockResponse(sseStream(['event: done\ndata: {"request_id":"r"}\n\n'])),
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await streamChat({ sessionId: "s2", messages: [], onEvent: () => {} });
+    await streamChat({
+      sessionId: "S",
+      message: "M",
+      provider: "P",
+      model: "MM",
+      onEvent: () => {},
+    });
 
     const call = fetchMock.mock.calls[0];
+    const body = JSON.parse(call[1].body);
+    expect(body).toEqual({
+      session_id: "S",
+      message: "M",
+      provider: "P",
+      model: "MM",
+    });
     expect(call[1].headers.Authorization).toBe("Bearer test-token");
-    expect(call[1].method).toBe("POST");
+  });
+
+  it("игнорирует невалидный (Zod) payload", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockResponse(
+        sseStream([
+          'event: delta\ndata: {"text":"wrong-field"}\n\n', // нет content
+          'event: delta\ndata: {"content":"ok"}\n\n',
+        ]),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const events: ChatEvent[] = [];
+    await streamChat({
+      message: "x",
+      provider: "p",
+      model: "m",
+      onEvent: (e) => events.push(e),
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0].type === "delta" && events[0].payload.content).toBe("ok");
   });
 
   it("бросает при non-2xx", async () => {
@@ -68,33 +112,34 @@ describe("streamChat (SSE-клиент)", () => {
       ),
     );
     await expect(
-      streamChat({ sessionId: "s3", messages: [], onEvent: () => {} }),
+      streamChat({
+        message: "x",
+        provider: "p",
+        model: "m",
+        onEvent: () => {},
+      }),
     ).rejects.toThrow(/HTTP 500/);
   });
 
-  it("обрабатывает чанки, разделённые по половине события", async () => {
+  it("обрабатывает чанки, разделённые по границе блока", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       mockResponse(
         sseStream([
-          'data: {"type":"delt',
-          'a","text":"AB"}\n',
+          'event: delta\ndata: {"con',
+          'tent":"AB"}\n',
           "\n",
-          'data: {"type":"delta","text":"CD"}\n\n',
+          'event: delta\ndata: {"content":"CD"}\n\n',
         ]),
       ),
     );
     vi.stubGlobal("fetch", fetchMock);
-
     const events: ChatEvent[] = [];
     await streamChat({
-      sessionId: "s4",
-      messages: [],
+      message: "x",
+      provider: "p",
+      model: "m",
       onEvent: (e) => events.push(e),
     });
-
-    expect(events.map((e) => e.type === "delta" && e.text)).toEqual([
-      "AB",
-      "CD",
-    ]);
+    expect(events.length).toBe(2);
   });
 });

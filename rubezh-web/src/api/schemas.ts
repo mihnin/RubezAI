@@ -2,70 +2,74 @@ import { z } from "zod";
 
 /**
  * Zod-схемы для рантайм-валидации ответов API.
- * Источник — docs/contracts/*.schema.json.
- *
- * Любой ответ от rubezh-api проходит через .parse(),
- * чтобы UI не доверял типу без проверки и падал детерминированно
- * при расхождении контракта.
+ * Источник — реальные DTO в rubezh-api/internal/api/*.go
+ * (сверено через e2e Итерации E.1/E.2).
  */
 
 // ─── chat ────────────────────────────────────────────────────────────────
+// SSE-формат backend: именованные события (event: name\n data: json\n\n),
+// см. chat.schema.json и rubezh-api/internal/api/chat.go sseEventPayload.
 
 export const ChatEntitySchema = z.object({
   type: z.string(),
   pseudonym: z.string(),
 });
 
-export const ChatDeltaEventSchema = z.object({
-  type: z.literal("delta"),
-  text: z.string(),
+export const ChatMetaPayloadSchema = z.object({
+  decision: z.string(),
+  risk: z.object({
+    level: z.string(),
+    score: z.number(),
+    classes: z.array(z.string()),
+  }),
+  provider: z.string(),
+  reasons: z.array(z.string()),
+  request_id: z.string(),
+  entities: z.array(ChatEntitySchema).optional(),
 });
 
-export const ChatDecisionEventSchema = z.object({
-  type: z.literal("decision"),
-  decision: z.enum([
-    "allow_raw",
-    "allow_masked",
-    "allow_summary_only",
-    "deny",
-    "escalate",
-  ]),
-  entities: z.array(ChatEntitySchema).default([]),
+export const ChatDeltaPayloadSchema = z.object({
+  content: z.string(),
 });
 
-export const ChatErrorEventSchema = z.object({
-  type: z.literal("error"),
+export const ChatDonePayloadSchema = z.object({
+  request_id: z.string(),
+});
+
+export const ChatErrorPayloadSchema = z.object({
   message: z.string(),
-  request_id: z.string().optional(),
+  request_id: z.string(),
 });
 
-export const ChatDoneEventSchema = z.object({
-  type: z.literal("done"),
-});
+// Нормализованный фронтовый ChatEvent — discriminated по type,
+// формируется из backend SSE-events в sse.ts.
+export type ChatEvent =
+  | { type: "meta"; payload: z.infer<typeof ChatMetaPayloadSchema> }
+  | { type: "delta"; payload: z.infer<typeof ChatDeltaPayloadSchema> }
+  | { type: "done"; payload: z.infer<typeof ChatDonePayloadSchema> }
+  | { type: "error"; payload: z.infer<typeof ChatErrorPayloadSchema> };
 
-export const ChatEventSchema = z.discriminatedUnion("type", [
-  ChatDeltaEventSchema,
-  ChatDecisionEventSchema,
-  ChatErrorEventSchema,
-  ChatDoneEventSchema,
-]);
-
-export type ChatEvent = z.infer<typeof ChatEventSchema>;
 export type ChatEntity = z.infer<typeof ChatEntitySchema>;
 
 // ─── documents ───────────────────────────────────────────────────────────
 
 export const DocumentSchema = z.object({
   id: z.string().uuid(),
+  owner_id: z.string().uuid(),
   filename: z.string(),
-  status: z.enum(["pending", "processing", "done", "failed", "deleted"]),
-  size_bytes: z.number().int().nonnegative(),
+  content_type: z.string().nullable(),
+  size_bytes: z.number().int().nonnegative().nullable(),
+  status: z.string(),
+  phase: z.string().nullable(),
+  error: z.string().nullable(),
+  processing_attempts: z.number().int().nonnegative(),
+  processing_started_at: z.string().nullable(),
   created_at: z.string(),
+  updated_at: z.string(),
 });
 
 export const DocumentListSchema = z.object({
-  items: z.array(DocumentSchema),
-  next_cursor: z.string().nullable(),
+  documents: z.array(DocumentSchema),
 });
 
 export type Document = z.infer<typeof DocumentSchema>;
@@ -73,16 +77,16 @@ export type Document = z.infer<typeof DocumentSchema>;
 // ─── policies ────────────────────────────────────────────────────────────
 
 export const PolicySchema = z.object({
-  id: z.string(),
+  id: z.string().uuid(),
   name: z.string(),
   description: z.string(),
-  enabled: z.boolean(),
-  thresholds: z.record(z.string(), z.unknown()).optional(),
+  is_active: z.boolean(),
+  current_version: z.number().int(),
+  created_at: z.string(),
+  updated_at: z.string(),
 });
 
-export const PolicyListSchema = z.object({
-  items: z.array(PolicySchema),
-});
+export const PolicyListSchema = z.array(PolicySchema);
 
 export type Policy = z.infer<typeof PolicySchema>;
 
@@ -91,16 +95,18 @@ export type Policy = z.infer<typeof PolicySchema>;
 export const ModelSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
-  provider_type: z.string(),
-  base_url: z.string(),
-  enabled: z.boolean(),
-  trusted_local: z.boolean(),
+  trust_level: z.string(),
+  adapter: z.string(),
+  endpoint: z.string(),
+  max_tokens: z.number().int().nullable(),
+  rate_limit_per_min: z.number().int().nullable(),
+  is_enabled: z.boolean(),
   has_api_key: z.boolean(),
+  created_at: z.string(),
+  updated_at: z.string(),
 });
 
-export const ModelListSchema = z.object({
-  items: z.array(ModelSchema),
-});
+export const ModelListSchema = z.array(ModelSchema);
 
 export type Model = z.infer<typeof ModelSchema>;
 
@@ -108,15 +114,19 @@ export type Model = z.infer<typeof ModelSchema>;
 
 export const AuditEventSchema = z.object({
   id: z.string().uuid(),
-  event_type: z.string(),
-  user_id: z.string().nullable(),
-  session_id: z.string().nullable(),
-  detail: z.record(z.string(), z.unknown()),
   created_at: z.string(),
+  user_id: z.string(),
+  event_type: z.string(),
+  model_provider_id: z.string().nullable(),
+  risk_level: z.string().nullable(),
+  risk_classes: z.array(z.string()),
+  policy_decision: z.string().nullable(),
+  request_id: z.string().nullable(),
+  has_leak: z.boolean(),
 });
 
 export const AuditListSchema = z.object({
-  items: z.array(AuditEventSchema),
+  events: z.array(AuditEventSchema),
   next_cursor: z.string().nullable(),
 });
 
@@ -126,24 +136,39 @@ export type AuditEvent = z.infer<typeof AuditEventSchema>;
 
 export const IncidentSchema = z.object({
   id: z.string().uuid(),
-  severity: z.enum(["low", "medium", "high", "critical"]),
-  status: z.enum(["open", "in_progress", "closed"]),
-  title: z.string(),
-  description: z.string(),
-  event_type: z.string(),
   audit_event_id: z.string().nullable(),
+  user_id: z.string().nullable(),
   reporter_id: z.string().nullable(),
   assignee_id: z.string().nullable(),
-  created_at: z.string(),
+  severity: z.enum(["low", "medium", "high", "critical"]),
+  status: z.enum(["open", "in_progress", "closed"]),
+  trigger: z.string().nullable(),
+  title: z.string(),
+  summary: z.string().nullable(),
+  resolution: z.string().nullable(),
   closed_at: z.string().nullable(),
-  etag: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
 });
 
 export const IncidentListSchema = z.object({
-  items: z.array(IncidentSchema),
+  incidents: z.array(IncidentSchema),
+  next_cursor: z.string().nullable(),
 });
 
 export type Incident = z.infer<typeof IncidentSchema>;
+
+// ─── chat sessions ───────────────────────────────────────────────────────
+
+export const ChatSessionSchema = z.object({
+  id: z.string().uuid(),
+  user_id: z.string().uuid(),
+  title: z.string().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export type ChatSession = z.infer<typeof ChatSessionSchema>;
 
 // ─── auth ────────────────────────────────────────────────────────────────
 

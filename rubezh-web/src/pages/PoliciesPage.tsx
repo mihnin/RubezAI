@@ -22,7 +22,7 @@ export default function PoliciesPage() {
       )}
 
       <div className="space-y-3">
-        {data?.items?.map((p: Policy) => (
+        {data?.map((p: Policy) => (
           <div
             key={p.id}
             className="bg-slate-900 border border-slate-700 rounded-lg p-4"
@@ -31,23 +31,21 @@ export default function PoliciesPage() {
               <h3 className="font-medium">{p.name}</h3>
               <span
                 className={`text-xs px-2 py-0.5 rounded ${
-                  p.enabled
+                  p.is_active
                     ? "bg-emerald-500/20 text-emerald-300"
                     : "bg-slate-700 text-slate-400"
                 }`}
               >
-                {p.enabled ? "включена" : "выключена"}
+                {p.is_active ? "активна" : "неактивна"}
               </span>
             </div>
             <p className="text-sm text-slate-400">{p.description}</p>
-            {p.thresholds && (
-              <pre className="mt-3 text-xs bg-slate-950 p-2 rounded overflow-auto text-slate-400">
-                {JSON.stringify(p.thresholds, null, 2)}
-              </pre>
-            )}
+            <p className="mt-2 text-xs text-slate-500">
+              версия {p.current_version}
+            </p>
           </div>
         ))}
-        {!isLoading && (data?.items?.length ?? 0) === 0 && (
+        {!isLoading && (data?.length ?? 0) === 0 && (
           <div className="text-slate-500">Политики не настроены</div>
         )}
       </div>

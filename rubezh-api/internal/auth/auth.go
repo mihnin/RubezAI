@@ -36,6 +36,9 @@ var validRoles = map[Role]bool{
 	RoleDeveloper:         true,
 }
 
+// IsValidRole сообщает, является ли роль одной из определённых.
+func IsValidRole(r Role) bool { return validRoles[r] }
+
 // ErrInvalidToken — токен отсутствует, повреждён или подпись неверна.
 var ErrInvalidToken = errors.New("auth: невалидный токен")
 

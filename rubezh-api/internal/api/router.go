@@ -45,6 +45,9 @@ func NewRouter(deps Deps) (http.Handler, *chat.Orchestrator) {
 	r.Use(requestLogger(deps.Logger))
 
 	r.Get("/health", healthHandler)
+	// Публичный auth-endpoint: выпуск dev-токена. Вне auth-middleware.
+	// docs/design/identity.md §«MVP auth-flow».
+	r.Post("/api/auth/dev-login", devLoginHandler(deps.Store, deps.AuthSecret))
 	r.Route("/api", func(api chi.Router) {
 		api.Use(auth.Middleware(deps.AuthSecret))
 		api.Post("/policies/test", policyTestHandler)
