@@ -11,20 +11,30 @@ const SEVERITY_COLOR: Record<string, string> = {
 };
 
 const STATUS_NEXT: Record<string, string[]> = {
-  open: ["in_progress", "closed"],
-  in_progress: ["closed"],
-  closed: [],
+  open: ["investigating", "resolved", "false_positive"],
+  investigating: ["resolved", "false_positive"],
+  resolved: [],
+  false_positive: [],
 };
 
-/** IncidentsPage (Итерация 15). Контракт — incidentDTO
- *  (rubezh-api/internal/api/incidents.go: incidents + next_cursor). */
+const STATUS_LABEL: Record<string, string> = {
+  open: "открыт",
+  investigating: "расследование",
+  resolved: "закрыт",
+  false_positive: "ложное срабатывание",
+};
+
+const TERMINAL_STATUSES = new Set(["resolved", "false_positive"]);
+
+/** IncidentsPage (F1+F3). PATCH через If-Match (RFC 7232). Терминальный
+ *  переход требует resolution (бизнес-правило backend incidentPatchDTO). */
 export default function IncidentsPage() {
-  const [status, setStatus] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
   const { data, isLoading, error } = useQuery({
-    queryKey: ["incidents", status],
+    queryKey: ["incidents", statusFilter],
     queryFn: () =>
       apiFetch(
-        `/api/incidents${status ? `?status=${encodeURIComponent(status)}` : ""}`,
+        `/api/incidents${statusFilter ? `?status=${encodeURIComponent(statusFilter)}` : ""}`,
         IncidentListSchema,
       ),
   });
@@ -35,14 +45,15 @@ export default function IncidentsPage() {
       <div className="mb-4 flex gap-2 text-sm">
         <label className="text-slate-400">Статус:</label>
         <select
-          value={status}
-          onChange={(e) => setStatus(e.target.value)}
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
           className="bg-slate-800 border border-slate-700 rounded px-2 py-1"
         >
           <option value="">все</option>
           <option value="open">open</option>
-          <option value="in_progress">in_progress</option>
-          <option value="closed">closed</option>
+          <option value="investigating">investigating</option>
+          <option value="resolved">resolved</option>
+          <option value="false_positive">false_positive</option>
         </select>
       </div>
 
@@ -67,19 +78,29 @@ export default function IncidentsPage() {
 function IncidentCard({ inc }: { inc: Incident }) {
   const qc = useQueryClient();
   const [err, setErr] = useState<string | null>(null);
+  const [closing, setClosing] = useState<string | null>(null);
 
-  // MVP: optimistic concurrency через If-Match не используется, т.к. backend DTO
-  // не возвращает etag-поле в JSON (ETag должен браться из response-header — техдолг F1).
-  // PATCH без If-Match. При коллизии — последний writer выигрывает.
   const patchMut = useMutation({
-    mutationFn: (status: string) =>
+    mutationFn: (vars: { status: string; resolution?: string }) =>
       apiFetchRaw(`/api/incidents/${inc.id}`, {
         method: "PATCH",
-        body: JSON.stringify({ status }),
+        headers: { "If-Match": inc.updated_at },
+        body: JSON.stringify(vars),
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["incidents"] }),
+    onSuccess: () => {
+      setClosing(null);
+      qc.invalidateQueries({ queryKey: ["incidents"] });
+    },
     onError: (e: Error) => setErr(e.message),
   });
+
+  const onClick = (status: string) => {
+    if (TERMINAL_STATUSES.has(status)) {
+      setClosing(status);
+    } else {
+      patchMut.mutate({ status });
+    }
+  };
 
   const nextStatuses = STATUS_NEXT[inc.status] ?? [];
 
@@ -91,6 +112,11 @@ function IncidentCard({ inc }: { inc: Incident }) {
           {inc.summary && (
             <p className="text-sm text-slate-400 mt-1">{inc.summary}</p>
           )}
+          {inc.resolution && (
+            <p className="mt-2 text-xs text-emerald-300 italic">
+              Решение: {inc.resolution}
+            </p>
+          )}
         </div>
         <div className="flex flex-col items-end gap-1">
           <span
@@ -99,7 +125,7 @@ function IncidentCard({ inc }: { inc: Incident }) {
             {inc.severity}
           </span>
           <span className="text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-300">
-            {inc.status}
+            {STATUS_LABEL[inc.status] ?? inc.status}
           </span>
         </div>
       </div>
@@ -113,6 +139,8 @@ function IncidentCard({ inc }: { inc: Incident }) {
       {err && (
         <div className="mt-2 text-xs text-red-300" role="alert">
           {err}
+          {err.includes("412") &&
+            " — инцидент изменён другим пользователем. Обновите страницу."}
         </div>
       )}
       {nextStatuses.length > 0 && (
@@ -120,15 +148,79 @@ function IncidentCard({ inc }: { inc: Incident }) {
           {nextStatuses.map((s) => (
             <button
               key={s}
-              onClick={() => patchMut.mutate(s)}
+              onClick={() => onClick(s)}
               disabled={patchMut.isPending}
               className="text-xs px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-40"
             >
-              → {s}
+              → {STATUS_LABEL[s] ?? s}
             </button>
           ))}
         </div>
       )}
+
+      {closing && (
+        <ResolutionDialog
+          status={closing}
+          onCancel={() => setClosing(null)}
+          onConfirm={(resolution) => patchMut.mutate({ status: closing, resolution })}
+          busy={patchMut.isPending}
+        />
+      )}
+    </div>
+  );
+}
+
+function ResolutionDialog({
+  status,
+  onCancel,
+  onConfirm,
+  busy,
+}: {
+  status: string;
+  onCancel: () => void;
+  onConfirm: (resolution: string) => void;
+  busy: boolean;
+}) {
+  const [text, setText] = useState("");
+  return (
+    <div
+      className="fixed inset-0 bg-black/60 flex items-center justify-center"
+      onClick={onCancel}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="bg-slate-900 border border-slate-700 rounded-lg p-6 w-[480px]"
+      >
+        <h2 className="font-semibold mb-1">
+          Закрыть инцидент: {STATUS_LABEL[status]}
+        </h2>
+        <p className="text-xs text-slate-500 mb-4">
+          Резолюция обязательна. Будет записана в audit и в incident_notes.
+        </p>
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          autoFocus
+          rows={5}
+          className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm"
+          placeholder="Опишите принятые меры…"
+        />
+        <div className="mt-4 flex gap-2 justify-end">
+          <button
+            onClick={onCancel}
+            className="px-3 py-1.5 text-sm text-slate-400"
+          >
+            Отмена
+          </button>
+          <button
+            onClick={() => onConfirm(text)}
+            disabled={busy || text.trim().length < 3}
+            className="px-3 py-1.5 text-sm rounded bg-cyan-500 text-slate-950 disabled:opacity-40"
+          >
+            Подтвердить
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

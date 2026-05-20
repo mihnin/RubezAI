@@ -25,6 +25,19 @@ func (r *Router) Register(provider Provider) {
 	r.providers[provider.Name()] = provider
 }
 
+// Replace атомарно заменяет набор провайдеров (hot-reload после INSERT/
+// UPDATE в БД). Используется handler'ами createModel и updateModelAPIKey,
+// чтобы новый провайдер становился виден без restart api (F2).
+func (r *Router) Replace(providers []Provider) {
+	next := make(map[string]Provider, len(providers))
+	for _, p := range providers {
+		next[p.Name()] = p
+	}
+	r.mu.Lock()
+	r.providers = next
+	r.mu.Unlock()
+}
+
 // Has сообщает, зарегистрирован ли провайдер с указанным именем.
 func (r *Router) Has(name string) bool {
 	r.mu.RLock()

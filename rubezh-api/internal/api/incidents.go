@@ -225,9 +225,20 @@ func getIncidentHandler(store *storage.Storage) http.HandlerFunc {
 			http.Error(w, "ошибка чтения", http.StatusInternalServerError)
 			return
 		}
+		// ETag (RFC 7232 weak) для optimistic concurrency на PATCH.
+		// Значение совпадает с тем, что patchIncidentHandler ожидает в
+		// If-Match (RFC3339Nano updated_at), → клиент может слать его
+		// без парсинга тела (F1).
+		w.Header().Set("ETag", incidentETag(inc.UpdatedAt))
 		writeJSON(w, http.StatusOK,
 			incidentToDTO(inc, resolveTrigger(r.Context(), inc, store)))
 	}
+}
+
+// incidentETag формирует ETag-значение из updated_at. Используется
+// одновременно как ETag-заголовок и как ожидаемое значение в If-Match.
+func incidentETag(updatedAt time.Time) string {
+	return updatedAt.UTC().Format(time.RFC3339Nano)
 }
 
 // createIncidentHandler — POST /api/incidents (manual).
@@ -377,6 +388,9 @@ func executeIncidentPatch(
 			http.StatusInternalServerError)
 		return
 	}
+	// Свежий ETag после PATCH — клиент может сразу слать следующий
+	// PATCH без повторного GET (F1).
+	w.Header().Set("ETag", incidentETag(inc.UpdatedAt))
 	writeJSON(w, http.StatusOK,
 		incidentToDTO(inc, resolveTrigger(r.Context(), inc, store)))
 }

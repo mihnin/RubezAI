@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -59,6 +60,20 @@ func main() {
 	llmRouter := buildRouter(providers, cfg.LLMAPIKey, mappingCipher, logger)
 	logger.Info("LLM Router инициализирован", "providers", llmRouter.Count())
 
+	// reloadRouter — hot-reload Router'а из БД после CREATE/UPDATE
+	// провайдера (F2). Атомарная подмена набора через Router.Replace.
+	reloadRouter := func(ctx context.Context) error {
+		fresh, err := store.ListModelProviders(ctx)
+		if err != nil {
+			return fmt.Errorf("reload: %w", err)
+		}
+		llmRouter.Replace(buildProviders(
+			fresh, cfg.LLMAPIKey, mappingCipher, logger))
+		logger.Info("LLM Router перезагружен",
+			"providers", llmRouter.Count())
+		return nil
+	}
+
 	// MinIO для документов (Итерация 10). Опционально — если env
 	// MINIO_ENDPOINT не задан, эндпойнты /api/documents отдают 503.
 	var minioClient *storage.MinioClient
@@ -87,6 +102,7 @@ func main() {
 		SanitizerURL:  cfg.SanitizerURL,
 		MappingCipher: mappingCipher,
 		Minio:         minioClient,
+		ReloadRouter:  reloadRouter,
 	})
 	srv := &http.Server{
 		Addr:              ":" + cfg.HTTPPort,
@@ -143,6 +159,20 @@ func buildRouter(
 	cipher *crypto.Cipher, logger *slog.Logger,
 ) *llm.Router {
 	router := llm.NewRouter()
+	router.Replace(buildProviders(providers, envFallback, cipher, logger))
+	return router
+}
+
+// buildProviders — общая логика выбора активных провайдеров и
+// разрешения api_key. Вынесена отдельно для переиспользования в
+// reloadRouter (F2): на hot-reload набор провайдеров пересобирается
+// тем же путём, что и при старте, и атомарно подменяется через
+// Router.Replace.
+func buildProviders(
+	providers []storage.ModelProvider, envFallback string,
+	cipher *crypto.Cipher, logger *slog.Logger,
+) []llm.Provider {
+	out := make([]llm.Provider, 0, len(providers))
 	for _, provider := range providers {
 		if !provider.IsEnabled {
 			continue
@@ -153,13 +183,13 @@ func buildRouter(
 			if !ok {
 				continue // fail-closed: не регистрируем без ключа
 			}
-			router.Register(llm.NewOpenAIProvider(
+			out = append(out, llm.NewOpenAIProvider(
 				provider.Name, provider.Endpoint, key))
 		default:
-			router.Register(llm.NewMockProvider(provider.Name))
+			out = append(out, llm.NewMockProvider(provider.Name))
 		}
 	}
-	return router
+	return out
 }
 
 // resolveProviderKey расшифровывает api_key провайдера или возвращает

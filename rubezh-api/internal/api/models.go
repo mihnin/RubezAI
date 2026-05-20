@@ -1,8 +1,10 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"time"
@@ -142,6 +144,7 @@ func listModelsHandler(store *storage.Storage) http.HandlerFunc {
 // повторить через POST /api/models/:id/api-key.
 func createModelHandler(
 	store *storage.Storage, cipher *crypto.Cipher,
+	reloadRouter func(context.Context) error, logger *slog.Logger,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		role, _ := auth.RoleFromContext(r.Context())
@@ -199,7 +202,25 @@ func createModelHandler(
 			}
 			created.APIKeyEncrypted = ct
 		}
+		tryReloadRouter(r.Context(), reloadRouter, logger, "createModel")
 		writeJSON(w, http.StatusCreated, modelProviderToDTO(created))
+	}
+}
+
+// tryReloadRouter — best-effort hot-reload LLM Router после изменения
+// провайдера (F2). Ошибка не блокирует ответ (CRUD-операция уже
+// зафиксирована в БД), но логируется. Если reloadRouter == nil
+// (некоторые тесты не настраивают замыкание) — no-op.
+func tryReloadRouter(
+	ctx context.Context, reload func(context.Context) error,
+	logger *slog.Logger, op string,
+) {
+	if reload == nil {
+		return
+	}
+	if err := reload(ctx); err != nil && logger != nil {
+		logger.Error("hot-reload LLM Router не удался",
+			"op", op, "error", err)
 	}
 }
 
@@ -208,6 +229,7 @@ func createModelHandler(
 // AAD = id (иммутабельный, MINOR-1 ревью 9.5). RBAC — admin/developer.
 func updateModelAPIKeyHandler(
 	store *storage.Storage, cipher *crypto.Cipher,
+	reloadRouter func(context.Context) error, logger *slog.Logger,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		role, _ := auth.RoleFromContext(r.Context())
@@ -260,6 +282,7 @@ func updateModelAPIKeyHandler(
 				http.StatusInternalServerError)
 			return
 		}
+		tryReloadRouter(r.Context(), reloadRouter, logger, "updateAPIKey")
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

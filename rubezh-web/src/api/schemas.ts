@@ -141,14 +141,14 @@ export const IncidentSchema = z.object({
   reporter_id: z.string().nullable(),
   assignee_id: z.string().nullable(),
   severity: z.enum(["low", "medium", "high", "critical"]),
-  status: z.enum(["open", "in_progress", "closed"]),
+  status: z.enum(["open", "investigating", "resolved", "false_positive"]),
   trigger: z.string().nullable(),
   title: z.string(),
   summary: z.string().nullable(),
   resolution: z.string().nullable(),
   closed_at: z.string().nullable(),
   created_at: z.string(),
-  updated_at: z.string(),
+  updated_at: z.string(), // ETag-значение для optimistic concurrency (F1)
 });
 
 export const IncidentListSchema = z.object({

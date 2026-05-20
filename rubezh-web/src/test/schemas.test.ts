@@ -120,7 +120,7 @@ describe("Zod-схемы контрактов API (сверены с rubezh-api 
       reporter_id: null,
       assignee_id: null,
       severity: "high",
-      status: "open",
+      status: "investigating",
       trigger: "chat",
       title: "t",
       summary: null,
