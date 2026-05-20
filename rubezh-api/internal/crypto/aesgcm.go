@@ -14,8 +14,11 @@
 package crypto
 
 import (
+	"crypto/aes"
 	"crypto/cipher"
+	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 )
 
@@ -43,25 +46,62 @@ type Cipher struct {
 // NewCipher строит Cipher из 32-байтового ключа. Источник случайности —
 // crypto/rand.Reader (для детерминизма в тестах есть NewCipherWithRand).
 func NewCipher(key []byte) (*Cipher, error) {
-	return nil, errors.New("crypto: not implemented (Ф1 red)")
+	return NewCipherWithRand(key, rand.Reader)
 }
 
 // NewCipherWithRand — то же, что NewCipher, но позволяет инжектировать
-// источник случайности (тесты на nonce-uniqueness).
+// источник случайности (тесты на nonce-uniqueness и детерминизм).
 func NewCipherWithRand(key []byte, randReader io.Reader) (*Cipher, error) {
-	return nil, errors.New("crypto: not implemented (Ф1 red)")
+	if len(key) != keyLen {
+		return nil, ErrInvalidKeyLength
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("crypto: построение AES-блока: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("crypto: построение GCM: %w", err)
+	}
+	if randReader == nil {
+		randReader = rand.Reader
+	}
+	return &Cipher{gcm: gcm, rand: randReader}, nil
 }
 
 // Encrypt шифрует plaintext под AAD. Формат: nonce(12) || ct || tag(16).
 // AAD должен передаваться неизменным в Decrypt; иначе расшифровка
 // упадёт ошибкой аутентификации GCM.
 func (c *Cipher) Encrypt(plaintext, aad []byte) ([]byte, error) {
-	return nil, errors.New("crypto: not implemented (Ф1 red)")
+	if c == nil || c.gcm == nil {
+		return nil, ErrCipherNotInitialized
+	}
+	nonce := make([]byte, c.gcm.NonceSize())
+	if _, err := io.ReadFull(c.rand, nonce); err != nil {
+		return nil, fmt.Errorf("crypto: генерация nonce: %w", err)
+	}
+	// Seal prepends nonce to output: result = nonce || ciphertext || tag.
+	return c.gcm.Seal(nonce, nonce, plaintext, aad), nil
 }
 
 // Decrypt расшифровывает данные, ранее полученные через Encrypt с теми
 // же AAD. Возвращает ErrCiphertextTooShort если данные явно невалидны;
 // в остальных случаях — обёрнутую ошибку GCM (тампер/неверный ключ/AAD).
 func (c *Cipher) Decrypt(ciphertext, aad []byte) ([]byte, error) {
-	return nil, errors.New("crypto: not implemented (Ф1 red)")
+	if c == nil || c.gcm == nil {
+		return nil, ErrCipherNotInitialized
+	}
+	nonceSize := c.gcm.NonceSize()
+	minLen := nonceSize + c.gcm.Overhead()
+	if len(ciphertext) < minLen {
+		return nil, ErrCiphertextTooShort
+	}
+	nonce, ct := ciphertext[:nonceSize], ciphertext[nonceSize:]
+	plain, err := c.gcm.Open(nil, nonce, ct, aad)
+	if err != nil {
+		// Сообщение не содержит ни plaintext, ни ct — инвариант
+		// «никакого raw в логах».
+		return nil, fmt.Errorf("crypto: расшифровка/аутентификация: %w", err)
+	}
+	return plain, nil
 }
