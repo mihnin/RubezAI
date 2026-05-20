@@ -149,7 +149,7 @@
   - **M5** `ui/chat.md` уточнён: длина hash в tooltip, источник entities при reload, 4 состояния диалога «Превью».
 - **Открытый техдолг этапа A (MINOR, не блокирует Итерацию 9):** заметки архитектора в задаче A.6 (m1–m12 первого ревью, см. истории ревью).
 
-### 🔄 Итерация 9 — Go: Audit / Incidents / шифрованные mappings / история
+### ~~Итерация 9 — Go: Audit / Incidents / шифрованные mappings / история~~ ✅ Принято 9.75/10
 
 - **Цель:** append-only Audit API, Incidents API с авто-инцидентом при `deny`/`escalate`/`response_leak_detected`, шифрованная персистентность `pseudonym_mappings` (AES-256-GCM), история сессии `GET /api/chat/sessions/:id/messages`. Подробно — `docs/design/iteration-9.md` (v2.1).
 - **Архитектурный план:** v1 — 8.7/10 на доработку (3 MAJOR + 8 MINOR); v2 — 9.65/10 принят к реализации; v2.1 — все 7 новых MINOR закрыты в плане.
@@ -163,8 +163,9 @@
   - **Ф3 оркестратор** — `d531752`; PseudonymMap.LogValue() (никакого raw в логах), MappingAAD=SHA-256(session_id‖pseudonym), auto_incident.go (severityFor leak +2 ступени), Cipher в Orchestrator, расширение Store interface, config MAPPING_ENCRYPTION_KEY fail-closed, main проброс Cipher.
   - **Ф4 HTTP** — `e5b9fd5`; 9 эндпойнтов (`/api/audit-events*`, `/api/incidents*`, `/api/chat/sessions/:id/messages`), 2 контракта (`audit.schema.json`, `incidents.schema.json`); 12 API-тестов (включая критический тест на отсутствие start/end в JSON истории; 412/428 PATCH; developer scope 404).
 - **Самооценка реализации:** 9.7/10 — все архитектурные решения плана реализованы; критические инварианты безопасности доказаны тестами; 10 пакетов green.
+- **Архитектор:** ревью 1 — 9.4/10 НА ДОРАБОТКУ (3 MAJOR + бюджет + MINOR-10); доработка `510402c` → ревью 2 — 9.5/10 НА ДОРАБОТКУ (MAJOR-A graceful shutdown, MAJOR-B тест-дыра export filters); доводка `f13907b` → ревью 3 — **9.75/10 ПРИНЯТО К ЗАКРЫТИЮ**.
 - **Закрывает критерии:** 10, 11.
-- **Статус:** на ревью архитектора.
+- **Техдолг (3 косметических MINOR):** двойная пустая строка в audit.go:17-18; `TestChatEndpointFullFlow` без `orch.Wait()` в Cleanup; `TestExportAuditEventsCSV` не проверяет marker в CSV-строке. Не блокируют MVP.
 
 ### ☐ Итерация 10 — Worker: документы
 
@@ -259,3 +260,6 @@
 | 9 — план, ревью 1 | 2026-05-20 | 9.1/10 | На доработку — 3 MAJOR (reporter_id миграция, event_type enum, developer access) + 8 MINOR |
 | 9 — план, ревью 2 | 2026-05-20 | 9.65/10 | Принят к реализации (3 MAJOR + 8 MINOR закрыты); рекомендованы правки 7 новых MINOR до Ф1 |
 | 9 — план, v2.1 | 2026-05-20 | ожид. ≥9.7 | 7 MINOR закрыты в тексте плана (AAD per-mapping, atomic Tx3, severityFor leak, atomic PATCH, 404 developer, notes-RW матрица) |
+| 9 — реализация, ревью 1 | 2026-05-20 | 9.4/10 | На доработку — 3 MAJOR (export filters игнорируются, latency регрессия от auto-incident, бюджет incidents.go) + MINOR-10 |
+| 9 — реализация, ревью 2 | 2026-05-20 | 9.5/10 | На доработку — MAJOR-A (auto-incident at shutdown), MAJOR-B (тест-дыра по export filters) |
+| 9 — реализация, ревью 3 | 2026-05-20 | **9.75/10** | **ПРИНЯТО К ЗАКРЫТИЮ** — graceful shutdown с orch.Wait(), усиленный test export-filters; 3 косметических MINOR → техдолг |
