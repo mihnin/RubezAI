@@ -17,7 +17,12 @@ import (
 )
 
 // validAdapter — допустимые адаптеры (CHECK model_providers.adapter).
-var validAdapter = map[string]bool{"mock": true, "openai_compatible": true}
+// Синхронизировано с миграцией 000012_external_adapters.
+var validAdapter = map[string]bool{
+	"mock":              true,
+	"openai_compatible": true,
+	"anthropic":         true,
+}
 
 // modelProviderDTO — публичная форма ModelProvider.
 // has_api_key: bool (Итерация 9.5) — есть ли зашифрованный ключ;

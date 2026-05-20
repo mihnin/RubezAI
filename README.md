@@ -80,28 +80,60 @@ docker compose ps
 5. **Инциденты** — при утечке или deny создаётся `auto`-инцидент со ссылкой
    на `audit_event_id`; терминальный переход требует `resolution`.
 
-### Подключение локальной LLM (LM Studio / Ollama / vLLM)
+### Внешние модели (Claude, ChatGPT, Gemini, Grok, DeepSeek-cloud)
 
-«Рубеж ИИ» поддерживает любые OpenAI-совместимые endpoint'ы. Пример с
-**LM Studio + DeepSeek-R1-Distill-Qwen-7B**:
+Миграция `000013_seed_external_providers` создаёт seed для 5 внешних
+провайдеров (выключены до ввода ключа):
 
-1. Запустить LM Studio → загрузить модель → включить server на `:1234`.
-2. Открыть **Web UI → Модели → Добавить**:
-   - Имя: `deepseek-local`
-   - Trust level: **trusted_local** (LLM получит raw данные — оправдано
-     для модели внутри периметра)
-   - Adapter: `openai_compatible`
-   - Endpoint: `http://host.docker.internal:1234/v1`
-     *(Windows/Mac Docker Desktop; на Linux — IP хоста)*
-   - API key: пустой (LM Studio не требует)
-3. В разделе **Чат** в правом верхнем углу — picker провайдеров.
-   Раскройте → в поле «Модель» впишите имя загруженной модели
-   (например `deepseek-r1-distill-qwen-7b`). Выбор сохраняется в
-   localStorage.
-4. Hot-reload Router — новая модель доступна **без restart api**.
+| Имя              | Adapter           | Endpoint                                               |
+|------------------|-------------------|--------------------------------------------------------|
+| `openai-gpt`     | openai_compatible | `https://api.openai.com/v1`                            |
+| `anthropic-claude` | **anthropic**   | `https://api.anthropic.com` (Messages API)             |
+| `google-gemini`  | openai_compatible | `https://generativelanguage.googleapis.com/v1beta/openai` |
+| `xai-grok`       | openai_compatible | `https://api.x.ai/v1`                                  |
+| `deepseek-cloud` | openai_compatible | `https://api.deepseek.com/v1`                          |
 
-Для **внешних API** (OpenAI/Anthropic/Yandex GPT) — `trust_level: external`
-и API key через UI или env. Внешние модели получают только **masked** текст.
+Установка ключа (UI: **Модели → Изменить API-ключ**, или curl/CLI):
+```bash
+rubezh login --role admin
+rubezh models set-key deepseek-cloud --key 'sk-…'
+# или через env: --key '$DEEPSEEK_KEY'
+```
+
+Все 5 — `trust_level: external` → получают **только masked** текст. ПДн в
+ответе восстанавливаются обратно для пользователя (псевдоним → raw).
+
+### Локальные модели (LM Studio / Ollama / vLLM) — для обезличивания
+
+Локальные LLM в архитектуре «Рубежа» — **не для основного чата**, а как
+LLM-reviewer внутри `rubezh-sanitizer` (фильтр 2/3, см.
+`docs/ARCHITECTURE.md §2.1`). Пример: DeepSeek-R1-Distill-Qwen-7B через
+LM Studio на `host.docker.internal:1234`. Trust level = `trusted_local`.
+
+### CLI
+
+Бинарь `rubezh` — статический Go-CLI к API. Сборка:
+```bash
+docker build -t rubezh-cli -f cli/Dockerfile .
+alias rubezh='docker run --rm --network rubezh-ai_rubezh \
+  -e RUBEZH_API_URL=http://rubezh-api:8080 -e HOME=/tmp \
+  -v ~/.rubezh:/tmp/.rubezh rubezh-cli'
+```
+
+Команды:
+```bash
+rubezh login --role user                              # сохранить токен
+rubezh models list
+rubezh models set-key NAME --key 'sk-…'
+rubezh chat --provider deepseek-cloud --model deepseek-chat "Привет"
+rubezh docs upload ./contract.pdf
+rubezh docs list
+rubezh audit list --type chat_request
+rubezh incidents list
+```
+
+Все CLI-команды проходят тот же sanitizer + policy engine, что и Web UI;
+audit-trail и инциденты создаются одинаково.
 
 ## Статус проекта
 

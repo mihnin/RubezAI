@@ -185,6 +185,15 @@ func buildProviders(
 			}
 			out = append(out, llm.NewOpenAIProvider(
 				provider.Name, provider.Endpoint, key))
+		case "anthropic":
+			// Claude (Messages API). Ключ обязателен (если не пройдёт
+			// resolveProviderKey — fail-closed, как у openai).
+			key, ok := resolveProviderKey(provider, envFallback, cipher, logger)
+			if !ok {
+				continue
+			}
+			out = append(out, llm.NewAnthropicProvider(
+				provider.Name, provider.Endpoint, key))
 		default:
 			out = append(out, llm.NewMockProvider(provider.Name))
 		}
