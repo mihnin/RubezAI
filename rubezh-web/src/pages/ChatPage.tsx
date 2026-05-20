@@ -11,6 +11,7 @@ import { streamChat } from "../api/sse";
 import { apiFetch } from "../api/client";
 import {
   ModelListSchema,
+  ChatSessionSchema,
   type ChatEvent,
   type Model,
 } from "../api/schemas";
@@ -30,7 +31,9 @@ const STORAGE_MODEL = "rubezh.chat.model";
 export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
-  const [sessionId] = useState<string>(() => crypto.randomUUID());
+  // session_id создаётся при первом send (lazy) через POST /api/chat/sessions.
+  // Backend требует существующую запись в chat_sessions, локальный UUID не годится.
+  const [sessionId, setSessionId] = useState<string>("");
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -97,8 +100,23 @@ export default function ChatPage() {
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     try {
+      // Lazy-создание сессии при первом сообщении — backend ожидает
+      // существующую запись в chat_sessions (FK), локальный UUID не годится.
+      let sid = sessionId;
+      if (!sid) {
+        const created = await apiFetch(
+          "/api/chat/sessions",
+          ChatSessionSchema,
+          {
+            method: "POST",
+            body: JSON.stringify({ title: "web-ui" }),
+          },
+        );
+        sid = created.id;
+        setSessionId(sid);
+      }
       await streamChat({
-        sessionId,
+        sessionId: sid,
         message: userMsg.content,
         provider: activeProvider.name,
         model: modelName || activeProvider.name,
@@ -126,7 +144,7 @@ export default function ChatPage() {
               className="font-mono text-slate-400"
               data-testid="session-id"
             >
-              {sessionId.slice(0, 8)}
+              {sessionId ? sessionId.slice(0, 8) : "—"}
             </span>
           </p>
         </div>
