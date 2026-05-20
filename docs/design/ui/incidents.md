@@ -20,7 +20,7 @@ audit-log §«Сообщить о подозрении»).
 │                 │ │ #0042  14:33  ◉leak_detected  ●high  open      ⋯    │  │
 │                 │ │ #0041  14:18  ⛔deny           ●high  invest.   ⋯    │  │
 │                 │ │ #0040  12:01  ⛔deny           ●med   resolved  ⋯    │  │
-│                 │ │ #0039  10:54  ⚠escalate       ●med   contained ⋯    │  │
+│                 │ │ #0039  10:54  ⚠escalate       ●med   false_pos ⋯    │  │
 │                 │ │ #0038  09:22  ◉leak_detected  ●crit  open      ⋯    │  │
 │                 │ │ ...                                                  │  │
 │                 │ └──────────────────────────────────────────────────────┘  │
@@ -97,12 +97,14 @@ audit-log §«Сообщить о подозрении»).
   - high — `danger`;
   - medium — `warning`;
   - low — `info`.
-- **Status** chip:
+- **Status** chip (4 значения — соответствуют БД-схеме миграции 000006):
   - open — `warning`;
   - investigating — `info`;
-  - contained — `success` (мутед);
-  - resolved — `text-muted`;
+  - resolved — `text-muted` с иконкой ✓;
   - false_positive — `text-muted` с иконкой ⊘.
+
+  5-й статус «contained» (UI-черновик) **исключён в Итерации 9** —
+  схема БД его не предусматривает; добавление — пост-MVP.
 - Действия (⋯): открыть, назначить мне, сменить статус, скопировать ID.
 
 ### Detail (карточка расследования)
@@ -122,8 +124,8 @@ Bento-grid из 5 «коробок»:
 ### Actions
 
 - **Назначить мне** — `PATCH {assignee_id: me}`.
-- **Сменить статус** — Radix Select: open / investigating / contained
-  / resolved / false_positive.
+- **Сменить статус** — Radix Select: open / investigating /
+  resolved / false_positive (4 значения; см. таблицу выше).
 - **Эскалировать** — повышает severity на одну ступень + audit-event
   `incident_escalated`.
 - **False positive** — `status = false_positive` + диалог-причина
@@ -135,6 +137,9 @@ Bento-grid из 5 «коробок»:
 - Read-write для роли security_officer + assignee;
 - read-only для auditor / compliance_officer.
 - Markdown lite (без HTML), max 2000 chars/note.
+- **Append-only**: заметки нельзя редактировать (триггер БД блокирует
+  UPDATE/DELETE). Чтобы исправить — добавить отменяющую заметку
+  «Опечатка в №3 — правильно: …». Tooltip над composer'ом поясняет.
 - Audit-event `incident_note_added` пишется на каждую заметку.
 
 ## Состояния
@@ -145,7 +150,8 @@ Bento-grid из 5 «коробок»:
 | List loading | Skeleton |
 | Detail loading | Skeleton bento-grid |
 | Read-only role (auditor) | Все Actions disabled с tooltip «Только чтение» |
-| PATCH conflict (409) | Toast `warning`: «Инцидент изменён другим пользователем. Обновить?» |
+| PATCH conflict (412 Precondition Failed) | Toast `warning`: «Инцидент изменён другим пользователем. Обновить?»; фронт обязан слать `If-Match: <updated_at>` (см. iteration-9.md §Р4) |
+| PATCH 428 Precondition Required | Программная ошибка: фронт забыл If-Match. Логируется, инциденту не передаётся |
 | PATCH error | Inline-сообщение в Actions-карточке |
 | Trigger event missing | (для manual-инцидентов) — карточка с пометкой «Без триггера» |
 
