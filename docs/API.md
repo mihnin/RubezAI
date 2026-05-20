@@ -55,7 +55,7 @@
 | POST | `/api/chat` | any | ✅ 8 | Отправить запрос; ответ — поток **SSE** |
 | GET | `/api/chat/sessions` | any | ✅ 8 | Список сессий пользователя |
 | POST | `/api/chat/sessions` | any | ✅ 8 | Создать пустую сессию |
-| GET | `/api/chat/sessions/:id/messages` | владелец | 🔄 9 | История сообщений сессии (с превью обезличивания) |
+| GET | `/api/chat/sessions/:id/messages` | владелец | ✅ 9 | История сообщений сессии (с превью обезличивания) |
 
 `POST /api/chat` (тело) — см. `chat.schema.json#ChatRequest`:
 
@@ -118,9 +118,9 @@ event: error  data: {"message":"...","request_id":"..."}
 
 | Метод | Путь | Роли | Статус | Назначение |
 |-------|------|------|--------|------------|
-| GET | `/api/audit-events` | sec/comp/audit/admin | 🔄 9 | Журнал с фильтрами (период, актор, тип, решение, риск, leak-flag) |
-| GET | `/api/audit-events/:id` | sec/comp/audit/admin | 🔄 9 | Полная запись для drawer |
-| POST | `/api/audit-events/export` | sec/comp/audit/admin | 🔄 9 | Экспорт CSV/NDJSON; сам аудитируется |
+| GET | `/api/audit-events` | sec/comp/audit/admin | ✅ 9 | Журнал с фильтрами (период, актор, тип, решение, риск, leak-flag) |
+| GET | `/api/audit-events/:id` | sec/comp/audit/admin | ✅ 9 | Полная запись для drawer |
+| POST | `/api/audit-events/export` | sec/comp/audit/admin | ✅ 9 | Экспорт CSV/NDJSON; сам аудитируется |
 
 `audit_events` — **append-only**, методов изменения/удаления нет
 (триггер БД `rubezh_block_mutation`, миграция `000003`).
@@ -129,10 +129,10 @@ event: error  data: {"message":"...","request_id":"..."}
 
 | Метод | Путь | Роли | Статус | Назначение |
 |-------|------|------|--------|------------|
-| GET | `/api/incidents` | sec/comp/audit/admin | 🔄 9 | Список (фильтры: status, assignee, severity) |
-| GET | `/api/incidents/:id` | sec/comp/audit/admin | 🔄 9 | Карточка расследования |
-| PATCH | `/api/incidents/:id` | sec/admin | 🔄 9 | Изменить статус/assignee/severity |
-| POST | `/api/incidents/:id/notes` | sec/admin (assignee) | 🔄 9 | Добавить заметку расследователя |
+| GET | `/api/incidents` | sec/comp/audit/admin | ✅ 9 | Список (фильтры: status, assignee, severity) |
+| GET | `/api/incidents/:id` | sec/comp/audit/admin | ✅ 9 | Карточка расследования |
+| PATCH | `/api/incidents/:id` | sec/admin | ✅ 9 | Изменить статус/assignee/severity |
+| POST | `/api/incidents/:id/notes` | sec/admin (assignee) | ✅ 9 | Добавить заметку расследователя |
 
 Авто-создание инцидента — при `deny` / `escalate` /
 `response_leak_detected: true` в `audit_events.detail`. Удаления
