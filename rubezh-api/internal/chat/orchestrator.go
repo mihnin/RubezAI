@@ -3,6 +3,8 @@ package chat
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -45,6 +47,38 @@ func NewOrchestrator(
 	s SanitizerClient, l LLMRouter, st Store, cipher *crypto.Cipher,
 ) *Orchestrator {
 	return &Orchestrator{sanitizer: s, llm: l, store: st, cipher: cipher}
+}
+
+// classifyLLMError возвращает короткое user-facing сообщение по причине
+// сбоя LLM-вызова. НЕ содержит секретов/raw URL/токенов — безопасно
+// отдать клиенту. Полный err пишется в slog отдельно (с request_id).
+func classifyLLMError(err error, content string) string {
+	if err == nil && content == "" {
+		return "модель вернула пустой ответ"
+	}
+	if err == nil {
+		return "ошибка вызова модели"
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "401") || strings.Contains(msg, "unauthorized"):
+		return "API-ключ недействителен (HTTP 401). Проверьте Модели → Изменить API-ключ."
+	case strings.Contains(msg, "403") || strings.Contains(msg, "forbidden"):
+		return "доступ к модели запрещён (HTTP 403)"
+	case strings.Contains(msg, "404"):
+		return "модель не найдена у провайдера (проверьте имя модели в picker'е)"
+	case strings.Contains(msg, "429") || strings.Contains(msg, "rate"):
+		return "превышен лимит запросов (HTTP 429), повторите через минуту"
+	case strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline"):
+		return "таймаут вызова модели (>60s)"
+	case strings.Contains(msg, "no such host") || strings.Contains(msg, "connection refused"):
+		return "endpoint провайдера недоступен (сеть/DNS)"
+	case strings.Contains(msg, "tls") || strings.Contains(msg, "certificate"):
+		return "ошибка TLS при подключении к провайдеру"
+	case strings.Contains(msg, "5") && strings.Contains(msg, "http"):
+		return "провайдер вернул ошибку 5xx — повторите запрос"
+	}
+	return "ошибка вызова модели"
 }
 
 // Wait блокирует до завершения всех фоновых задач (auto-incident
@@ -182,9 +216,19 @@ func (o *Orchestrator) runLLM(
 		Model: req.Model, Messages: buildLLMMessages(act),
 	})
 	if err != nil || resp.Content == "" {
+		// Полная ошибка пишется в slog для расследования (logs +
+		// audit detail), пользователю — короткая категория без
+		// утечки секретов или внутренних адресов.
+		userMsg := classifyLLMError(err, resp.Content)
+		slog.ErrorContext(ctx, "llm call failed",
+			"request_id", req.RequestID,
+			"provider", req.Provider,
+			"model", req.Model,
+			"category", userMsg,
+			"error", err)
 		o.recordAuditEvent(ctx, o.policyErrorEvent(req, preview, outcome,
-			map[string]any{"stage": "llm"}))
-		return sink.Fail("ошибка вызова модели", req.RequestID)
+			map[string]any{"stage": "llm", "category": userMsg}))
+		return sink.Fail(userMsg, req.RequestID)
 	}
 
 	leaked := pmap.DetectLeak(resp.Content)
