@@ -1,6 +1,7 @@
 # Итерация 10 — Worker: документы, очередь, MinIO, embeddings
 
-Архитектурный план **v1**. Закрывает критерий MVP 6
+Архитектурный план **v2** (доводка v1 8.2/10 по 3 MAJOR + 5 MINOR
+ревью архитектора). Закрывает критерий MVP 6
 («можно загрузить документ»). Опирается на:
 
 - `docs/PLAN.md` — карта итераций;
@@ -29,11 +30,14 @@
 - `POST /api/documents` — multipart upload, ≤50 МБ, pdf|docx
   (Compliance: `THREAT_MODEL.md T9`).
 - `GET /api/documents` — список с ACL.
-- `GET /api/documents/:id` — метаданные + статус.
+- `GET /api/documents/:id` — метаданные + статус + phase.
 - `GET /api/documents/:id/chunks` — список чанков (masked-only).
 - `GET /api/documents/:id/download` — оригинал (owner+admin;
   audit `document_downloaded`).
-- `DELETE /api/documents/:id` — soft-delete (owner+admin; audit).
+- `DELETE /api/documents/:id` — soft-delete БД + hard-delete MinIO
+  (owner+admin; audit). См. Р3.1.
+- `POST /api/documents/:id/retry` — manual re-queue для status=failed
+  (owner+admin; audit `document_retry_requested`). MAJOR-2 ревью v1.
 
 ### Вне границ (вынесено осознанно)
 
@@ -136,37 +140,68 @@ processing_started_at < now() - interval '15 minutes'` — забирает
 (graceful или kill -9). 15 минут — верхняя граница
 обработки одного документа (PDF 50 МБ + chunking + sanitize + embed).
 
-### Р3. Поток обработки одного документа
+### Р3. Поток обработки одного документа (v2 — идемпотентный)
 
 1. **Claim**: `claim_next_document()` — атомарная транзакция,
    возвращает row или None. None → sleep 2s, retry.
-2. **Download** из MinIO по `storage_key` → байты в памяти.
-3. **Parse** по `content_type` (`pdf` → pypdf; `docx` →
-   python-docx). Возврат — `list[str]` параграфов.
-4. **Chunking**: greedy-склейка параграфов до целевого размера
-   ~800 токенов (через `tiktoken.get_encoding("cl100k_base")`);
-   максимум 1024 на чанк; minimum — 50 (избегаем шум). Возврат —
-   `list[Chunk{text, token_count}]`.
-5. **Sanitize** каждый чанк через `POST /sanitize/preview` к
-   `rubezh-sanitizer` с `context="document"`:
-   - получаем `sanitized_text`, `risk`, `entities`;
-   - в БД пишем `document_chunks.content = sanitized_text`
-     (не raw — план §Р4 безопасности!), + `sanitization_results`
-     с `document_id`, `risk_*`, `entities` (whitelist полей,
-     как в чат-истории).
-6. **Embed** каждый sanitized-chunk через `Embedder` (mock):
-   `embedding = hash_to_vector(chunk.text, dim=1024)`. Запись в
-   `embeddings` таблицу.
-7. **Mark done**: `UPDATE documents SET status='done',
-   processing_started_at=NULL WHERE id=$1`.
+2. **Idempotent cleanup** (MAJOR-1 ревью v1 — закрывает дыру
+   повторной обработки): сразу после claim перед началом цикла —
+   `DELETE FROM document_chunks WHERE document_id=$1`. CASCADE
+   снесёт привязанные embeddings (ON DELETE CASCADE есть в
+   миграции 000004). Аналогично — `DELETE FROM sanitization_results
+   WHERE document_id=$1`. После этого повторная вставка не падает
+   на `UNIQUE(document_id, chunk_index)`. **Цена**: первая попытка
+   тоже делает no-op DELETE; стоимость пренебрежимая.
+3. **Phase tracking** (m5 ревью v1 — UX-spec ожидает chip
+   «⟳Парсинг»): миграция 000011 добавляет колонку
+   `documents.phase text NULL`. Worker обновляет `phase` атомарно
+   с шагом: `parsing` / `chunking` / `sanitizing` / `embedding`.
+   Колонка nullable — статус остаётся 4 значения, фаза —
+   sub-information для UI.
+4. **Download** из MinIO по `storage_key` → байты в памяти.
+   Heartbeat (m2 ревью v1): фоновая asyncio-task обновляет
+   `processing_started_at = now()` каждые 60s до завершения цикла.
+   Это закрывает кейс «процесс висит 14 минут — крашится — re-queue
+   не срабатывает по 15min таймауту».
+5. **Parse**, **Chunking** (как в v1).
+6. **Sanitize** каждый чанк через `POST /sanitize/preview` —
+   **параллельно с лимитом 4** через `asyncio.Semaphore(4)`
+   (m3 ревью v1 — на документе из 200 чанков иначе 200 sequential
+   HTTP-вызовов = слишком медленно). Batch-endpoint sanitizer'а —
+   пост-MVP.
+7. **Embed** (как в v1).
+8. **Mark done**: `UPDATE documents SET status='done',
+   processing_started_at=NULL, phase=NULL WHERE id=$1`.
 
-При любой ошибке (parse fail, sanitize HTTP-5xx, embedder fail):
+При любой ошибке: `UPDATE documents SET status='failed', error=$err,
+processing_started_at=NULL, phase=NULL`. **Manual retry**
+(MAJOR-2 ревью v1): эндпойнт `POST /api/documents/:id/retry`
+(owner / admin) переводит `failed` → `pending`, сбрасывает
+`processing_attempts = 0`. После 3 неудачных попыток — `failed`
+с error «retry limit exceeded»; admin/owner может вручную
+сбросить через retry.
 
-- `UPDATE documents SET status='failed', error=$err,
-   processing_started_at=NULL`.
-- Если `processing_attempts < 3` — статус остаётся 'failed', но
-  при ручном retry (POST `/api/documents/:id/retry` — пост-MVP)
-  можно вернуть в pending. В MVP — admin делает SQL вручную.
+### Р3.1. Удаление документа — семантика raw в MinIO (MAJOR-3)
+
+**Закрывает MAJOR-3 ревью v1: «soft-delete в БД не очищает raw в MinIO».**
+
+`DELETE /api/documents/:id` (owner+admin) выполняет:
+
+1. **Hard-delete object из MinIO** по `storage_key` — raw файл
+   удаляется немедленно (необратимо, как пользователь и ожидает).
+2. **Soft-delete в БД** — `UPDATE documents SET status='deleted',
+   error=NULL, storage_key='' WHERE id=$1`. Row остаётся для
+   аудита (нельзя стереть owner_id/created_at — это forensics).
+   Status 'deleted' — **новое 5-е значение** в CHECK enum (миграция
+   000011 расширяет). UI скрывает deleted-документы по умолчанию.
+3. **Cascade delete chunks/embeddings/sanitization_results** —
+   CASCADE автоматический (миграция 000004) или explicit DELETE.
+4. **Audit event** `document_deleted` с request_id и actor_id.
+5. **Idempotency**: повторный DELETE на уже deleted → 404
+   (не 200, не leak информации). 
+
+При status='deleted' GET-эндпойнты возвращают 404 (как несуществующий).
+Восстановление — пост-MVP; в MVP deleted = irrecoverable.
 
 ### Р4. Безопасность — `document_chunks.content` = sanitized
 
@@ -259,25 +294,43 @@ openai_compatible` — пост-MVP).
 
 `additionalProperties: false`. Аналогично chat-контракту.
 
-### Р9. Аудит-события документов
+### Р9. Аудит-события документов с request_id-коррелятором (m1 ревью v1)
 
-- `document_uploaded` — после успешного POST `/api/documents`.
-- `document_processing_started` — worker берёт документ (опц., для
-  трейсинга; в MVP можно опустить, добавляется в техдолге).
+Каждое event несёт `detail.request_id` (UUID, генерируется при
+claim в worker для processing_*-событий; берётся из HTTP-handler'а
+для uploaded/downloaded/deleted/retried). Coordinator —
+`document_id`+`request_id` для всей цепочки одного processing run.
+
+- `document_uploaded` — после успешного POST `/api/documents`
+  (HTTP request_id из middleware).
+- `document_processing_started` — worker берёт документ (новый
+  worker-generated UUID).
 - `document_processing_completed` — worker закончил (status=done).
-- `document_processing_failed` — worker завершил с ошибкой.
+- `document_processing_failed` — worker завершил с ошибкой (тот же
+  request_id что и started — для трейса).
 - `document_downloaded` — GET `/api/documents/:id/download`.
 - `document_deleted` — DELETE.
+- `document_retry_requested` — POST `/api/documents/:id/retry`.
 
 Все `event_type` добавляются в `audit.schema.json#AuditEventType` enum
 (расширение MVP-списка).
 
-## 3. Миграция 000011
+## 3. Миграция 000011 (v2: + phase, + deleted status, + retry-helpers)
 
 ```sql
 ALTER TABLE documents
   ADD COLUMN processing_started_at timestamptz,
-  ADD COLUMN processing_attempts   int NOT NULL DEFAULT 0;
+  ADD COLUMN processing_attempts   int NOT NULL DEFAULT 0,
+  ADD COLUMN phase                 text; -- m5: parsing/chunking/sanitizing/embedding/NULL
+
+-- MAJOR-3 ревью v1: status='deleted' (soft-delete БД-row + hard-delete MinIO).
+ALTER TABLE documents DROP CONSTRAINT documents_status_check;
+ALTER TABLE documents ADD CONSTRAINT documents_status_check
+  CHECK (status IN ('pending','processing','done','failed','deleted'));
+
+ALTER TABLE documents ADD CONSTRAINT documents_phase_check
+  CHECK (phase IS NULL OR
+         phase IN ('parsing','chunking','sanitizing','embedding'));
 
 CREATE INDEX idx_documents_pending_queue
   ON documents(created_at)
@@ -288,6 +341,12 @@ COMMENT ON INDEX idx_documents_pending_queue IS
 CREATE INDEX idx_documents_stuck
   ON documents(processing_started_at)
   WHERE status = 'processing';
+
+-- Idempotent re-processing: при claim'е worker сначала чистит
+-- ранее созданные данные. CASCADE через FK гарантирует
+-- атомарную очистку chunks+embeddings+sanitization_results.
+COMMENT ON COLUMN documents.processing_attempts IS
+  'Счётчик re-claim. Heartbeat обновляет processing_started_at каждые 60s.';
 ```
 
 ## 4. Файлы и бюджет
@@ -333,9 +392,13 @@ CREATE INDEX idx_documents_stuck
   HTTP-клиентом; `embeddings/mock.py` детерм. вектор; integration-
   тест processor end-to-end (с моками внешних сервисов).
 
-- **Ф6 (Go-API + storage):** `storage/documents.go` (List/Get/
-  Create/UpdateStatus/Delete + ACL-фильтрация); `api/documents.go`
-  (5 эндпойнтов); MinIO-клиент в Go; integration-тесты.
+- **Ф6a (Go-storage):** `storage/documents.go` (List/Get/Create/
+  UpdateStatus/SoftDelete/Retry + ACL-фильтрация по jsonb); тесты
+  на ACL-проверку каждой роли.
+- **Ф6b (Go-API + MinIO):** `api/documents.go` (6 эндпойнтов
+  включая retry); MinIO-клиент Go (boto3-аналог `minio-go/v7`);
+  hard-delete object при DELETE; integration-тесты role-permission +
+  ACL + cascade-delete.
 
 - **Ф7 (контракт + UI/intgr):** `documents.schema.json`; обновление
   `audit.schema.json` (новые event_type); финальный smoke-тест
@@ -368,13 +431,26 @@ CREATE INDEX idx_documents_stuck
   документ в `processing` навсегда без re-queue. Re-queue stuck
   по timestamp закрывает это.
 
-## 7. Самооценка плана: 9.5/10
+## 7. Самооценка плана v2: 9.7/10
+
+После закрытия 3 MAJOR + 5 MINOR из ревью v1:
+
+| Проблема | Закрытие в v2 |
+|----------|---------------|
+| M1 (re-queue без идемпотентности) | Р3 шаг 2: DELETE chunks/sanitization при claim, CASCADE embeddings |
+| M2 (UX-тупик при 3 fail) | Р3 + новый эндпойнт `POST /api/documents/:id/retry` |
+| M3 (raw в MinIO после soft-delete) | Р3.1: hard-delete object + soft-delete row; новый status 'deleted'; 404 при повторном DELETE |
+| m1 (request_id correlator) | Р9: каждое event несёт detail.request_id |
+| m2 (heartbeat) | Р3 шаг 4: фоновая task UPDATE processing_started_at каждые 60s |
+| m3 (sanitize batch) | Р3 шаг 6: asyncio.Semaphore(4) — 4 параллельных запроса |
+| m4 (claim sleep cadence) | Р3 шаг 1: подтверждена 2s |
+| m5 (phase tracking для UI) | Р3 шаг 3 + миграция 000011: колонка documents.phase |
 
 - Все архитектурные решения зафиксированы; границы MVP/пост-MVP
   явные.
 - БД-очередь без брокера согласована с принципами проекта.
 - Безопасность: chunk.content = sanitized (как chat_messages),
-  raw только в MinIO с явным контролем доступа.
-- Минус 0.5 — Server-Side Encryption MinIO в техдолге, не в MVP
-  (упрощение для скорости). Это допустимо для on-prem-контура,
-  но архитектор может потребовать SSE-S3 уже в MVP.
+  raw только в MinIO с явным контролем доступа + hard-delete при
+  DELETE.
+- Минус 0.3 — Server-Side Encryption MinIO в техдолге, не в MVP
+  (упрощение для скорости). Это допустимо для on-prem-контура.
