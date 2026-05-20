@@ -149,10 +149,16 @@
   - **M5** `ui/chat.md` уточнён: длина hash в tooltip, источник entities при reload, 4 состояния диалога «Превью».
 - **Открытый техдолг этапа A (MINOR, не блокирует Итерацию 9):** заметки архитектора в задаче A.6 (m1–m12 первого ревью, см. истории ревью).
 
-### ☐ Итерация 9 — Go: Audit и Incidents
+### 🔄 Итерация 9 — Go: Audit / Incidents / шифрованные mappings / история
 
-- **Цель:** append-only Audit API, Incidents API, авто-инцидент при `deny`; `/api/audit-events`, `/api/incidents`, `PATCH /api/incidents/:id`.
-- **Тесты:** audit-replay тест; авто-создание инцидента при deny.
+- **Цель:** append-only Audit API, Incidents API с авто-инцидентом при `deny`/`escalate`/`response_leak_detected`, шифрованная персистентность `pseudonym_mappings` (AES-256-GCM), история сессии `GET /api/chat/sessions/:id/messages`. Подробно — `docs/design/iteration-9.md` (v2.1).
+- **Архитектурный план:** v1 — 8.7/10 на доработку (3 MAJOR + 8 MINOR); v2 — 9.65/10 принят к реализации; v2.1 — все 7 новых MINOR закрыты в плане.
+- **Фазы (TDD):**
+  - **Ф1 AES-GCM crypto** — ✅ закрыта (red `ce6ec58` → green `f4a225c`, 17 sub-тестов зелёные).
+  - **Ф2 миграция 000008 + storage** — pseudonym_mappings/incidents/incident_notes CRUD; расширение audit + chat history.
+  - **Ф3 оркестратор** — расширение Tx1 (mappings с AAD=sha256(session_id||pseudonym)), auto-incident в Tx3, LogValuer для PseudonymMap, severityFor.
+  - **Ф4 HTTP** — 9 эндпойнтов, 2 новых контракта (`audit.schema.json`, `incidents.schema.json`), интеграционные тесты, role-permission, 412/428 PATCH.
+- **Тесты:** см. план §5; audit-replay, авто-создание incidents (deny/escalate/leak), append-only `incident_notes`, отсутствие start/end в истории, `incident_created_auto` в той же Tx что и INSERT incidents.
 - **Закрывает критерии:** 10, 11.
 
 ### ☐ Итерация 10 — Worker: документы
@@ -245,3 +251,6 @@
 | 8 — реализация, ревью 2 | 2026-05-20 | 9.6/10 | ПОДТВЕРЖДЕНО; 3 косметических MINOR устранены → 10/10 |
 | A — дизайн, ревью 1 | 2026-05-20 | 8.7/10 | На доработку — 5 MAJOR (auth-flow, SseError.request_id, history endpoint, API.md sync, chat.md uncertainties) |
 | A — дизайн, ревью 2 | 2026-05-20 | 9.7/10 | ПРИНЯТО К РЕАЛИЗАЦИИ — все 5 MAJOR закрыты, контракт+код+тесты+UX-spec симметричны |
+| 9 — план, ревью 1 | 2026-05-20 | 9.1/10 | На доработку — 3 MAJOR (reporter_id миграция, event_type enum, developer access) + 8 MINOR |
+| 9 — план, ревью 2 | 2026-05-20 | 9.65/10 | Принят к реализации (3 MAJOR + 8 MINOR закрыты); рекомендованы правки 7 новых MINOR до Ф1 |
+| 9 — план, v2.1 | 2026-05-20 | ожид. ≥9.7 | 7 MINOR закрыты в тексте плана (AAD per-mapping, atomic Tx3, severityFor leak, atomic PATCH, 404 developer, notes-RW матрица) |
