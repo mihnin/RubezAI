@@ -1,25 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { apiFetch } from "../api/client";
-
-interface Incident {
-  id: string;
-  severity: string;
-  status: string;
-  title: string;
-  description: string;
-  event_type: string;
-  audit_event_id: string | null;
-  reporter_id: string | null;
-  assignee_id: string | null;
-  created_at: string;
-  closed_at: string | null;
-  etag: string;
-}
-
-interface IncidentList {
-  items: Incident[];
-}
+import { apiFetch, apiFetchRaw } from "../api/client";
+import { IncidentListSchema, type Incident } from "../api/schemas";
 
 const SEVERITY_COLOR: Record<string, string> = {
   low: "bg-slate-700 text-slate-300",
@@ -37,11 +19,12 @@ const STATUS_NEXT: Record<string, string[]> = {
 /** IncidentsPage (Итерация 15). docs/design/ui/incidents.md. */
 export default function IncidentsPage() {
   const [status, setStatus] = useState("");
-  const { data, isLoading } = useQuery<IncidentList>({
+  const { data, isLoading } = useQuery({
     queryKey: ["incidents", status],
     queryFn: () =>
       apiFetch(
         `/api/incidents${status ? `?status=${encodeURIComponent(status)}` : ""}`,
+        IncidentListSchema,
       ),
   });
 
@@ -81,7 +64,7 @@ function IncidentCard({ inc }: { inc: Incident }) {
 
   const patchMut = useMutation({
     mutationFn: (status: string) =>
-      apiFetch(`/api/incidents/${inc.id}`, {
+      apiFetchRaw(`/api/incidents/${inc.id}`, {
         method: "PATCH",
         headers: { "If-Match": inc.etag },
         body: JSON.stringify({ status }),

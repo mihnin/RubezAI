@@ -1,19 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
-import { apiFetch } from "../api/client";
-
-interface DocItem {
-  id: string;
-  filename: string;
-  status: string;
-  size_bytes: number;
-  created_at: string;
-}
-
-interface DocList {
-  items: DocItem[];
-  next_cursor: string | null;
-}
+import { apiFetch, apiFetchRaw } from "../api/client";
+import { DocumentListSchema, type Document as DocItem } from "../api/schemas";
 
 /** DocumentsPage (Итерация 14). docs/design/ui/documents.md. */
 export default function DocumentsPage() {
@@ -21,9 +9,9 @@ export default function DocumentsPage() {
   const fileRef = useRef<HTMLInputElement>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
-  const { data, isLoading } = useQuery<DocList>({
+  const { data, isLoading } = useQuery({
     queryKey: ["documents"],
-    queryFn: () => apiFetch("/api/documents"),
+    queryFn: () => apiFetch("/api/documents", DocumentListSchema),
     refetchInterval: 5000,
   });
 
@@ -31,14 +19,7 @@ export default function DocumentsPage() {
     mutationFn: async (file: File) => {
       const fd = new FormData();
       fd.append("file", file);
-      const token = localStorage.getItem("rubezh.auth.token");
-      const resp = await fetch("/api/documents", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-        body: fd,
-      });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
-      return resp.json();
+      await apiFetchRaw("/api/documents", { method: "POST", body: fd });
     },
     onSuccess: () => {
       setUploadError(null);
@@ -50,7 +31,7 @@ export default function DocumentsPage() {
 
   const delMut = useMutation({
     mutationFn: (id: string) =>
-      apiFetch(`/api/documents/${id}`, { method: "DELETE" }),
+      apiFetchRaw(`/api/documents/${id}`, { method: "DELETE" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["documents"] }),
   });
 
@@ -109,7 +90,7 @@ export default function DocumentsPage() {
                 </td>
               </tr>
             )}
-            {data?.items?.map((d) => (
+            {data?.items?.map((d: DocItem) => (
               <tr key={d.id} className="border-t border-slate-800">
                 <td className="p-3 truncate max-w-xs">{d.filename}</td>
                 <td className="p-3">

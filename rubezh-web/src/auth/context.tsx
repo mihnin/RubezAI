@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { DevLoginResponseSchema } from "../api/schemas";
 
 /**
  * Auth-контекст MVP. Token хранится в localStorage (см.
@@ -54,19 +55,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!resp.ok) {
       throw new Error(`Не удалось войти: HTTP ${resp.status}`);
     }
-    const data = await resp.json();
+    const data = DevLoginResponseSchema.parse(await resp.json());
+    const nextUser: AuthUser = {
+      role: data.role,
+      user_id: data.user_id,
+      expires_at: data.expires_at,
+    };
     setToken(data.token);
-    setUser({
-      role: data.role,
-      user_id: data.user_id,
-      expires_at: data.expires_at,
-    });
+    setUser(nextUser);
     localStorage.setItem(STORAGE_TOKEN, data.token);
-    localStorage.setItem(STORAGE_USER, JSON.stringify({
-      role: data.role,
-      user_id: data.user_id,
-      expires_at: data.expires_at,
-    }));
+    localStorage.setItem(STORAGE_USER, JSON.stringify(nextUser));
   }, []);
 
   const logout = useCallback(() => {

@@ -1,21 +1,8 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { apiFetch } from "../api/client";
+import { apiFetch, apiFetchRaw } from "../api/client";
 import { useAuth } from "../auth/context";
-
-interface Model {
-  id: string;
-  name: string;
-  provider_type: string;
-  base_url: string;
-  enabled: boolean;
-  trusted_local: boolean;
-  has_api_key: boolean;
-}
-
-interface ModelsList {
-  items: Model[];
-}
+import { ModelListSchema, type Model } from "../api/schemas";
 
 /** ModelsPage (Итерация 15). admin/security_officer пишет; user читает. */
 export default function ModelsPage() {
@@ -23,9 +10,9 @@ export default function ModelsPage() {
   const { user } = useAuth();
   const canWrite = ["admin", "security_officer"].includes(user?.role ?? "");
 
-  const { data, isLoading } = useQuery<ModelsList>({
+  const { data, isLoading } = useQuery({
     queryKey: ["models"],
-    queryFn: () => apiFetch("/api/models"),
+    queryFn: () => apiFetch("/api/models", ModelListSchema),
   });
 
   const [showCreate, setShowCreate] = useState(false);
@@ -75,7 +62,7 @@ function ModelRow({ model, canWrite }: { model: Model; canWrite: boolean }) {
 
   const updMut = useMutation({
     mutationFn: () =>
-      apiFetch(`/api/models/${model.id}/api-key`, {
+      apiFetchRaw(`/api/models/${model.id}/api-key`, {
         method: "PUT",
         body: JSON.stringify({ api_key: newKey }),
       }),
@@ -166,7 +153,7 @@ function CreateModelModal({
   const [err, setErr] = useState<string | null>(null);
 
   const mut = useMutation({
-    mutationFn: () => apiFetch("/api/models", { method: "POST", body: JSON.stringify(form) }),
+    mutationFn: () => apiFetchRaw("/api/models", { method: "POST", body: JSON.stringify(form) }),
     onSuccess: onCreated,
     onError: (e: Error) => setErr(e.message),
   });

@@ -1,23 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
-
-interface Policy {
-  id: string;
-  name: string;
-  description: string;
-  enabled: boolean;
-  thresholds?: Record<string, unknown>;
-}
-
-interface PolicyList {
-  items: Policy[];
-}
+import { PolicyListSchema, type Policy } from "../api/schemas";
 
 /** PoliciesPage (Итерация 14). Read-only MVP. docs/design/ui/policies.md. */
 export default function PoliciesPage() {
-  const { data, isLoading, error } = useQuery<PolicyList>({
+  const { data, isLoading, error } = useQuery({
     queryKey: ["policies"],
-    queryFn: () => apiFetch("/api/policies"),
+    queryFn: () => apiFetch("/api/policies", PolicyListSchema),
   });
 
   return (
@@ -33,7 +22,7 @@ export default function PoliciesPage() {
       )}
 
       <div className="space-y-3">
-        {data?.items?.map((p) => (
+        {data?.items?.map((p: Policy) => (
           <div
             key={p.id}
             className="bg-slate-900 border border-slate-700 rounded-lg p-4"

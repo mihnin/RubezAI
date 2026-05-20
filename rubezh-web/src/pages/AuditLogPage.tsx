@@ -1,32 +1,34 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { apiFetch } from "../api/client";
-
-interface AuditEvent {
-  id: string;
-  event_type: string;
-  user_id: string | null;
-  session_id: string | null;
-  detail: Record<string, unknown>;
-  created_at: string;
-}
-
-interface AuditList {
-  items: AuditEvent[];
-  next_cursor: string | null;
-}
+import { apiFetch, apiDownload, ApiError } from "../api/client";
+import { AuditListSchema, type AuditEvent } from "../api/schemas";
 
 /** AuditLogPage (Итерация 15). docs/design/ui/audit-log.md. */
 export default function AuditLogPage() {
   const [filter, setFilter] = useState("");
+  const [exportError, setExportError] = useState<string | null>(null);
 
-  const { data, isLoading } = useQuery<AuditList>({
+  const { data, isLoading } = useQuery({
     queryKey: ["audit", filter],
     queryFn: () =>
       apiFetch(
         `/api/audit-events${filter ? `?event_type=${encodeURIComponent(filter)}` : ""}`,
+        AuditListSchema,
       ),
   });
+
+  async function exportCsv() {
+    setExportError(null);
+    const ts = new Date().toISOString().slice(0, 19).replace(/[:]/g, "-");
+    try {
+      await apiDownload(
+        `/api/audit-events/export${filter ? `?event_type=${filter}` : ""}`,
+        `audit-${ts}.csv`,
+      );
+    } catch (e) {
+      setExportError(e instanceof ApiError ? `HTTP ${e.status}` : "Сбой");
+    }
+  }
 
   return (
     <div className="p-6">
@@ -46,13 +48,18 @@ export default function AuditLogPage() {
           <option value="search_performed">search_performed</option>
           <option value="incident_created_auto">incident_created_auto</option>
         </select>
-        <a
-          href={`/api/audit-events/export${filter ? `?event_type=${filter}` : ""}`}
+        <button
+          onClick={exportCsv}
           className="ml-auto text-xs text-cyan-400 hover:text-cyan-300"
         >
           Экспорт CSV →
-        </a>
+        </button>
       </div>
+      {exportError && (
+        <div role="alert" className="mb-2 text-xs text-red-300">
+          {exportError}
+        </div>
+      )}
 
       <div className="bg-slate-900 border border-slate-700 rounded-lg overflow-hidden">
         <table className="w-full text-sm">
@@ -72,7 +79,7 @@ export default function AuditLogPage() {
                 </td>
               </tr>
             )}
-            {data?.items?.map((e) => (
+            {data?.items?.map((e: AuditEvent) => (
               <tr key={e.id} className="border-t border-slate-800 hover:bg-slate-800/30">
                 <td className="p-2 text-slate-400 whitespace-nowrap text-xs">
                   {new Date(e.created_at).toLocaleString("ru-RU")}
