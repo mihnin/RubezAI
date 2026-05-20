@@ -35,7 +35,8 @@ type modelProviderDTO struct {
 }
 
 // createModelRequest — POST /api/models. APIKey (plaintext) опционально:
-// если задан — шифруется AES-GCM с AAD=name перед записью в БД.
+// если задан — шифруется AES-GCM с AAD=id (UUID, иммутабельный,
+// MINOR-1 ревью Итерации 9.5) перед записью в БД.
 type createModelRequest struct {
 	Name            string  `json:"name"`
 	TrustLevel      string  `json:"trust_level"`
@@ -47,7 +48,7 @@ type createModelRequest struct {
 }
 
 // patchAPIKeyRequest — POST /api/models/:id/api-key. Plaintext шифруется
-// с AAD = name того же провайдера (read-modify-write). Пустая строка
+// с AAD = id того же провайдера (UUID, иммутабельный). Пустая строка
 // сбрасывает ключ (NULL) — provider будет использовать env LLM_API_KEY
 // fallback (deprecated, для backward compat).
 type patchAPIKeyRequest struct {

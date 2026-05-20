@@ -111,8 +111,13 @@ func (s *Storage) GetModelProvider(
 
 // CreateModelProvider создаёт провайдера модели. Пустой Endpoint сохраняется
 // как NULL. APIKeyEncrypted (если не пустой) шифруется уже на стороне
-// вызывающего (внутри api/models.go cipher.Encrypt с AAD=name); storage
+// вызывающего (внутри api/models.go cipher.Encrypt с AAD=id); storage
 // просто пишет байты.
+//
+// MVP-flow Итерации 9.5: api/models.go.createModelHandler делает
+// двухфазный CREATE — сначала INSERT без ключа (этот метод), затем
+// Encrypt(plaintext, AAD=id) → UpdateModelProviderAPIKey. AAD привязан
+// к иммутабельному id, переименование провайдера НЕ ломает ключ.
 func (s *Storage) CreateModelProvider(
 	ctx context.Context, input ModelProvider,
 ) (ModelProvider, error) {
@@ -142,8 +147,8 @@ func (s *Storage) CreateModelProvider(
 
 // UpdateModelProviderAPIKey обновляет зашифрованный ключ провайдера.
 // encrypted = nil/пусто → ключ становится NULL (использовать env-fallback).
-// AAD при шифровании привязан к name — если name меняется, ключ
-// нужно перевыпустить.
+// AAD при шифровании привязан к иммутабельному id (UUID, не name) —
+// после Итерации 9.5 ребрендинг/rename провайдера НЕ ломает ключ.
 func (s *Storage) UpdateModelProviderAPIKey(
 	ctx context.Context, id string, encrypted []byte,
 ) error {

@@ -175,8 +175,15 @@
 - **Тесты:** TestCreateModelForbiddenForUser, TestUpdateAPIKey-
   ForbiddenForUser, TestCreateModelWithAPIKey/WithoutAPIKey,
   TestUpdateModelAPIKey/EmptyClears, TestModelsResponseDoesNotLeakApiKey.
-- **Самооценка после доводки:** 9.7/10 — все 3 замечания ревью закрыты;
-  все 10 пакетов green с -race.
+- **Архитектор повторное ревью:** 9.8/10 — все 3 MAJOR/MINOR закрыты
+  проверяемо; rebust 2-фазный CREATE; orphan-state наблюдаем и
+  восстановим; новых дыр нет. Указана документационная регрессия:
+  5 устаревших комментариев `AAD=name` (миграция 000009 + 4 в коде).
+- **Финальная доводка** до **10/10** (косметический коммит):
+  4 комментария в коде обновлены на `AAD=id`; миграция **000010**
+  обновляет `COMMENT ON COLUMN model_providers.api_key_encrypted` в БД
+  (DBA в `\d+` теперь видит актуальное описание).
+- **Итог: ✅ Принято 10/10.**
 
 ### ~~Итерация 9 — Go: Audit / Incidents / шифрованные mappings / история~~ ✅ Принято 9.75/10
 
