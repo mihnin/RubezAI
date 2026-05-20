@@ -127,9 +127,11 @@ func TestExportAuditEventsCSV(t *testing.T) {
 	router, store, closeStore := fullTestRouter(t)
 	defer closeStore()
 
-	// Seed: 2 события разных типов с уникальным маркером.
+	// Seed: 2 события разных типов с уникальным маркером в
+	// masked_payload, чтобы при include_payload=true маркер попал
+	// в CSV-колонку (Техдолг 9-3).
 	marker := "export-" + strconv.FormatInt(time.Now().UnixNano(), 36)
-	seedAuditWithMarker(t, store, "chat_request", marker)
+	reqID := seedAuditWithMarker(t, store, "chat_request", marker)
 	seedAuditWithMarker(t, store, "chat_blocked", marker)
 
 	// Фильтруем только chat_request → в CSV ровно 1 строка с маркером.
@@ -163,6 +165,18 @@ func TestExportAuditEventsCSV(t *testing.T) {
 		t.Errorf("CSV не содержит chat_request: %s", csv)
 	}
 
+	// Техдолг 9-3: include_payload=true → masked_payload реально
+	// выгружен. marker записан как masked_payload в seedAuditWithMarker;
+	// проверяем что он есть в CSV.
+	if !strings.Contains(csv, marker) {
+		t.Errorf("CSV не содержит marker %q (include_payload=true не работает): %s",
+			marker, csv)
+	}
+	// Bonus: id seed-события в колонке id CSV — отслеживаемая запись.
+	if !strings.Contains(csv, reqID) {
+		t.Errorf("CSV не содержит id %q seed-события: %s", reqID, csv)
+	}
+
 	// MINOR-10: audit_exported реально записан в БД (compliance-инвариант).
 	rows, err := store.ListAuditEvents(context.Background(),
 		storage.AuditFilter{
@@ -186,16 +200,19 @@ func TestExportAuditEventsCSV(t *testing.T) {
 }
 
 // seedAuditWithMarker — вставляет audit-событие с конкретным event_type
-// и detail.marker для проверки в тестах.
+// и marker в masked_payload (для проверки CSV-выгрузки) + detail.marker
+// (для отлова в jsonb-фильтрах).
 func seedAuditWithMarker(
 	t *testing.T, store *storage.Storage, eventType, marker string,
 ) string {
 	t.Helper()
 	userID, _ := store.UserIDForRole(context.Background(), "user")
+	payload := marker
 	id, err := store.InsertAuditEvent(context.Background(),
 		storage.AuditEvent{
 			UserID: userID, EventType: eventType,
-			Detail: map[string]any{"marker": marker},
+			MaskedPayload: &payload,
+			Detail:        map[string]any{"marker": marker},
 		})
 	if err != nil {
 		t.Fatalf("InsertAuditEvent %s: %v", eventType, err)

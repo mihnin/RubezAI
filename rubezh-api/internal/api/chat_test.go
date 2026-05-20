@@ -343,13 +343,16 @@ func TestChatEndpointFullFlow(t *testing.T) {
 	llmRouter := llm.NewRouter()
 	name := registerProvider(t, store, llmRouter)
 
-	handler, _ := NewRouter(Deps{
+	handler, orch := NewRouter(Deps{
 		Logger:       discardLogger(),
 		Store:        store,
 		AuthSecret:   apiTestSecret,
 		Router:       llmRouter,
 		SanitizerURL: sanURL,
 	})
+	// Защита от будущих изменений payload, которые могут триггернуть
+	// auto-incident: дожидаемся фоновые goroutines до завершения теста.
+	t.Cleanup(orch.Wait)
 
 	body := `{"message":"Какая погода завтра в Москве","provider":"` + name + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/chat",

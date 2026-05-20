@@ -15,7 +15,6 @@ import (
 	"github.com/rubezh-ai/rubezh-api/internal/storage"
 )
 
-
 // auditAccessRoles — роли, имеющие полный доступ к audit-events.
 // Контракт audit.schema.json + план iteration-9.md §Р3.
 var auditAccessRoles = map[auth.Role]bool{
