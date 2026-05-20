@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -138,10 +139,18 @@ func uploadDocumentHandler(
 				http.StatusInternalServerError)
 			return
 		}
-		buf := make([]byte, header.Size)
-		if _, err := file.Read(buf); err != nil && err.Error() != "EOF" {
+		// MAJOR-m1 ревью: io.ReadAll с LimitReader — гарантирует
+		// полный read без обрезки на больших файлах. r.Body уже
+		// ограничен ParseMultipartForm(maxDocumentBytes) выше.
+		buf, err := io.ReadAll(io.LimitReader(file, maxDocumentBytes+1))
+		if err != nil {
 			http.Error(w, "ошибка чтения файла",
 				http.StatusInternalServerError)
+			return
+		}
+		if int64(len(buf)) > maxDocumentBytes {
+			http.Error(w, "файл слишком большой (>50 МБ)",
+				http.StatusRequestEntityTooLarge)
 			return
 		}
 		key := generateStorageKey(header.Filename)
@@ -151,7 +160,7 @@ func uploadDocumentHandler(
 				http.StatusBadGateway)
 			return
 		}
-		sz := header.Size
+		sz := int64(len(buf))
 		ct := contentType
 		doc, err := store.CreateDocument(r.Context(), storage.DocumentInput{
 			OwnerID: userID, Filename: header.Filename,
@@ -159,7 +168,10 @@ func uploadDocumentHandler(
 			ACL: json.RawMessage("[]"),
 		})
 		if err != nil {
-			// MinIO уже залит — теоретически orphan, но не критично.
+			// MAJOR-m2 ревью: чистим orphan-объект в MinIO при сбое
+			// CreateDocument — лучше потратить 1 API-вызов чем оставить
+			// raw-данные без owner-row в БД.
+			_ = minioClient.Remove(r.Context(), key)
 			http.Error(w, "ошибка создания записи",
 				http.StatusInternalServerError)
 			return
