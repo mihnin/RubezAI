@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+/* Дизайн-токены «Рубеж ИИ» (docs/design/ui-system.md §2 Dark default).
+   Тёмная тема по умолчанию; light переключается через [data-theme]. */
+@theme {
+  --color-bg-base: hsl(222 28% 4%);
+  --color-bg-elev-1: hsl(220 24% 8%);
+  --color-bg-elev-2: hsl(217 19% 14%);
+  --color-text-primary: hsl(210 20% 98%);
+  --color-text-secondary: hsl(213 14% 72%);
+  --color-text-muted: hsl(213 12% 56%);
+  --color-border-subtle: hsl(217 16% 22%);
+  --color-accent: hsl(189 50% 60%);
+  --color-danger: hsl(0 55% 55%);
+  --color-warning: hsl(38 70% 55%);
+  --color-success: hsl(95 30% 45%);
+}
+
+body {
+  font-family: "Inter", "Inter Tight", -apple-system, "Segoe UI", sans-serif;
+}

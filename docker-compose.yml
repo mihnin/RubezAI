@@ -151,6 +151,23 @@ services:
       - rubezh
     restart: unless-stopped
 
+  # Frontend (Итерация 12+): React + Vite, serve через Nginx.
+  rubezh-web:
+    build: ./rubezh-web
+    ports:
+      - "${WEB_PORT:-5173}:80"
+    depends_on:
+      rubezh-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://localhost/"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    networks:
+      - rubezh
+    restart: unless-stopped
+
 networks:
   rubezh:
     driver: bridge
