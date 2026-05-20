@@ -73,6 +73,8 @@ func NewRouter(deps Deps) (http.Handler, *chat.Orchestrator) {
 		api.Get("/audit-events", listAuditEventsHandler(deps.Store))
 		api.Get("/audit-events/{id}", getAuditEventHandler(deps.Store))
 		api.Post("/audit-events/export", exportAuditEventsHandler(deps.Store))
+		// GET-вариант для скачивания через простую ссылку (фронт apiDownload).
+		api.Get("/audit-events/export", exportAuditEventsHandler(deps.Store))
 		api.Get("/incidents", listIncidentsHandler(deps.Store))
 		api.Post("/incidents", createIncidentHandler(deps.Store))
 		api.Get("/incidents/{id}", getIncidentHandler(deps.Store))

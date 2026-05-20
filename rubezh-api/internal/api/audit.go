@@ -338,6 +338,39 @@ func (e *exportFiltersDTO) toStorageFilter() storage.AuditFilter {
 	return f
 }
 
+// parseExportRequest принимает как POST с JSON-body (сложные фильтры),
+// так и GET с query-параметрами (?format=csv&event_type=chat_request) —
+// последнее для скачивания через простую ссылку из браузера/CLI.
+func parseExportRequest(r *http.Request) (auditExportRequestDTO, error) {
+	var dto auditExportRequestDTO
+	if r.Method == http.MethodGet {
+		q := r.URL.Query()
+		dto.Format = q.Get("format")
+		if dto.Format == "" {
+			dto.Format = "csv"
+		}
+		if et := q.Get("event_type"); et != "" {
+			dto.Filters = &exportFiltersDTO{EventTypes: []string{et}}
+		}
+		return dto, nil
+	}
+	// POST: JSON-body допустим. Пустое тело трактуем как format=csv,
+	// без фильтров — чтобы кнопка «экспорт» на фронте работала без полей.
+	if r.ContentLength == 0 {
+		dto.Format = "csv"
+		return dto, nil
+	}
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&dto); err != nil {
+		return dto, errors.New("некорректный JSON")
+	}
+	if dto.Format == "" {
+		dto.Format = "csv"
+	}
+	return dto, nil
+}
+
 func exportAuditEventsHandler(store *storage.Storage) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		role, _ := auth.RoleFromContext(r.Context())
@@ -346,9 +379,9 @@ func exportAuditEventsHandler(store *storage.Storage) http.HandlerFunc {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
-		var dto auditExportRequestDTO
-		if err := decodeJSON(w, r, &dto); err != nil {
-			http.Error(w, "некорректный JSON", http.StatusBadRequest)
+		dto, err := parseExportRequest(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		if dto.Format != "csv" && dto.Format != "ndjson" {
