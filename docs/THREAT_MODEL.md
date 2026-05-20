@@ -84,6 +84,25 @@
   токен-стриминг (`Provider.Stream`) — после MVP, не меняет границ
   безопасности (проверка утечки выполняется до первого `delta`).
 
+## 6.bis. Остаточные риски Итерации 11 (RAG)
+
+- **Mock-embeddings** не имеют семантического смысла —
+  релевантность результатов RAG в MVP **случайна**. Pipeline валидируется
+  end-to-end (sanitize → embed → vector-search → ACL), но качество
+  возвращаемых чанков не отражает реальный поиск. **Точка расширения** —
+  замена `MockEmbedder` через интерфейс `Embedder` (worker — Python
+  `app/embeddings/interface.py`; api — Go `internal/llm/embedder.go`) на
+  реальный векторизатор (sentence-transformers, OpenAI-совместимый или
+  локальный через `trusted_local`). Замена не требует миграции схемы
+  (фикс `embeddings.vector(1024)`).
+- **Query plaintext не персистируется**: `audit.search_performed.detail`
+  хранит только SHA-256(query)[:16] хеш для трейса. Это намеренно —
+  даже компрометация audit-trail не раскроет запросов пользователей.
+- **ACL-фильтрация на SQL-уровне** через `acl @>jsonb_build_array(...)` —
+  выполняется в одном запросе с vector ORDER BY (план запроса
+  использует index-cond на documents). Утечка чужих чанков невозможна
+  через application-bug — фильтр в самом SQL.
+
 ## 7. Остаточные риски Итерации 9 (audit/incidents/шифрованные mappings)
 
 - **Расшифровка mapping (forensics-reveal) в MVP не реализована.**
