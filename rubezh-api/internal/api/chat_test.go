@@ -343,7 +343,7 @@ func TestChatEndpointFullFlow(t *testing.T) {
 	llmRouter := llm.NewRouter()
 	name := registerProvider(t, store, llmRouter)
 
-	handler := NewRouter(Deps{
+	handler, _ := NewRouter(Deps{
 		Logger:       discardLogger(),
 		Store:        store,
 		AuthSecret:   apiTestSecret,

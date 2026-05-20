@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -18,7 +19,7 @@ import (
 func fullTestRouter(t *testing.T) (http.Handler, *storage.Storage, func()) {
 	t.Helper()
 	store, closeStore := dbStore(t)
-	router := NewRouter(Deps{
+	router, _ := NewRouter(Deps{
 		Logger:       discardLogger(),
 		Store:        store,
 		AuthSecret:   apiTestSecret,
@@ -125,7 +126,14 @@ func TestGetAuditEventForSecurityOfficerOK(t *testing.T) {
 func TestExportAuditEventsCSV(t *testing.T) {
 	router, store, closeStore := fullTestRouter(t)
 	defer closeStore()
-	body := `{"format":"csv","include_payload":false,` +
+
+	// Seed: 2 события разных типов с уникальным маркером.
+	marker := "export-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	seedAuditWithMarker(t, store, "chat_request", marker)
+	seedAuditWithMarker(t, store, "chat_blocked", marker)
+
+	// Фильтруем только chat_request → в CSV ровно 1 строка с маркером.
+	body := `{"format":"csv","include_payload":true,` +
 		`"filters":{"event_types":["chat_request"]}}`
 	req := httptest.NewRequest(http.MethodPost,
 		"/api/audit-events/export", strings.NewReader(body))
@@ -143,8 +151,19 @@ func TestExportAuditEventsCSV(t *testing.T) {
 		t.Errorf("Content-Disposition = %q", cd)
 	}
 
-	// MINOR-10 ревью v2: export должен ПИСАТЬ audit-event audit_exported
-	// (compliance-инвариант). Проверяем что запись существует.
+	// MAJOR-B ревью v2: проверить, что фильтр event_types РЕАЛЬНО
+	// применён к выгрузке (не только записан в audit_exported.detail).
+	// Если фильтр не применился, в CSV была бы строка chat_blocked.
+	csv := rec.Body.String()
+	if strings.Count(csv, "chat_blocked") > 0 {
+		t.Errorf("CSV содержит chat_blocked, хотя фильтр event_types=chat_request: %s", csv)
+	}
+	// Минимум 2 строки (header + 1 event); строка chat_request с маркером.
+	if !strings.Contains(csv, "chat_request") {
+		t.Errorf("CSV не содержит chat_request: %s", csv)
+	}
+
+	// MINOR-10: audit_exported реально записан в БД (compliance-инвариант).
 	rows, err := store.ListAuditEvents(context.Background(),
 		storage.AuditFilter{
 			EventTypes: []string{"audit_exported"}, Limit: 10,
@@ -164,6 +183,24 @@ func TestExportAuditEventsCSV(t *testing.T) {
 	if !found {
 		t.Error("audit-event audit_exported (format=csv) не записан")
 	}
+}
+
+// seedAuditWithMarker — вставляет audit-событие с конкретным event_type
+// и detail.marker для проверки в тестах.
+func seedAuditWithMarker(
+	t *testing.T, store *storage.Storage, eventType, marker string,
+) string {
+	t.Helper()
+	userID, _ := store.UserIDForRole(context.Background(), "user")
+	id, err := store.InsertAuditEvent(context.Background(),
+		storage.AuditEvent{
+			UserID: userID, EventType: eventType,
+			Detail: map[string]any{"marker": marker},
+		})
+	if err != nil {
+		t.Fatalf("InsertAuditEvent %s: %v", eventType, err)
+	}
+	return id
 }
 
 func TestAuditCursorRoundTrip(t *testing.T) {

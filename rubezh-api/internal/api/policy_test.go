@@ -20,11 +20,12 @@ import (
 const apiTestSecret = "api-test-secret"
 
 func apiTestRouter() http.Handler {
-	return NewRouter(Deps{
+	h, _ := NewRouter(Deps{
 		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Store:      nil, // /api/policies/test и /health не обращаются к БД
 		AuthSecret: apiTestSecret,
 	})
+	return h
 }
 
 func userToken() string {
@@ -230,7 +231,7 @@ func dbRouter(t *testing.T) (http.Handler, func()) {
 		store.Close()
 		t.Skipf("БД недоступна: %v", err)
 	}
-	router := NewRouter(Deps{
+	router, _ := NewRouter(Deps{
 		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Store:      store,
 		AuthSecret: apiTestSecret,

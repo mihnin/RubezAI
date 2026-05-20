@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/rubezh-ai/rubezh-api/internal/api"
@@ -57,23 +59,50 @@ func main() {
 		os.Exit(1)
 	}
 
+	handler, orchestrator := api.NewRouter(api.Deps{
+		Logger:        logger,
+		Store:         store,
+		AuthSecret:    cfg.AuthSecret,
+		Router:        llmRouter,
+		SanitizerURL:  cfg.SanitizerURL,
+		MappingCipher: mappingCipher,
+	})
 	srv := &http.Server{
-		Addr: ":" + cfg.HTTPPort,
-		Handler: api.NewRouter(api.Deps{
-			Logger:        logger,
-			Store:         store,
-			AuthSecret:    cfg.AuthSecret,
-			Router:        llmRouter,
-			SanitizerURL:  cfg.SanitizerURL,
-			MappingCipher: mappingCipher,
-		}),
+		Addr:              ":" + cfg.HTTPPort,
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+
+	// Graceful shutdown (MAJOR-A финального ревью Итерации 9): после
+	// получения SIGINT/SIGTERM сначала отказываем новым соединениям,
+	// затем ждём фоновые auto-incident-горутины оркестратора и закрываем БД.
+	// Без этого Tx3 (CreateAutoIncident) может оборваться на shutdown
+	// и нарушить compliance-инвариант полноты audit-trail.
+	shutdownCtx, stop := signal.NotifyContext(context.Background(),
+		os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-shutdownCtx.Done()
+		logger.Info("rubezh-api: получен сигнал shutdown")
+		shutdownTimeout, cancel := context.WithTimeout(
+			context.Background(), 30*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutdownTimeout); err != nil {
+			logger.Error("ошибка graceful shutdown HTTP", "error", err)
+		}
+	}()
+
 	logger.Info("rubezh-api запущен", "port", cfg.HTTPPort)
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := srv.ListenAndServe(); err != nil &&
+		!errors.Is(err, http.ErrServerClosed) {
 		logger.Error("ошибка HTTP-сервера", "error", err)
 		os.Exit(1)
 	}
+
+	// HTTP завершён — ждём фоновые задачи оркестратора (auto-incident).
+	logger.Info("rubezh-api: ожидание фоновых задач оркестратора")
+	orchestrator.Wait()
+	logger.Info("rubezh-api: остановлен корректно")
 }
 
 // buildRouter регистрирует провайдеров LLM по конфигурации из БД.

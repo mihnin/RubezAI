@@ -29,7 +29,11 @@ type Deps struct {
 
 // NewRouter собирает HTTP-роутер сервиса. Маршруты /api защищены
 // auth-middleware; /health — публичная проба.
-func NewRouter(deps Deps) http.Handler {
+//
+// Возвращает (handler, orchestrator) — main.go вызывает orchestrator.Wait()
+// при graceful shutdown, чтобы дождаться фоновых auto-incident-горутин
+// (план iteration-9.md §Р4 + MAJOR-A финального ревью).
+func NewRouter(deps Deps) (http.Handler, *chat.Orchestrator) {
 	orchestrator := chat.NewOrchestrator(
 		sanitizer.NewClient(deps.SanitizerURL), deps.Router, deps.Store,
 		deps.MappingCipher)
@@ -66,7 +70,7 @@ func NewRouter(deps Deps) http.Handler {
 		api.Post("/incidents/{id}/notes",
 			addIncidentNoteHandler(deps.Store))
 	})
-	return r
+	return r, orchestrator
 }
 
 // requestLogger — middleware структурного логирования запросов: метод, путь,
