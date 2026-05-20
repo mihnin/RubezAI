@@ -120,6 +120,37 @@ services:
       - rubezh
     restart: unless-stopped
 
+  # Worker: парсинг документов, chunking, embeddings, БД-очередь (Итерация 10).
+  rubezh-worker:
+    build: ./rubezh-worker
+    environment:
+      WORKER_PORT: 8002
+      WORKER_LOG_LEVEL: info
+      DATABASE_URL: postgres://${POSTGRES_USER:-rubezh}:${POSTGRES_PASSWORD:-rubezh}@postgres:5432/${POSTGRES_DB:-rubezh}?sslmode=disable
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-rubezh}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-rubezh-minio}
+      MINIO_BUCKET: ${MINIO_BUCKET:-rubezh-documents}
+      MINIO_SECURE: "false"
+      SANITIZER_URL: http://rubezh-sanitizer:8001
+    ports:
+      - "8002:8002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      rubezh-sanitizer:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    networks:
+      - rubezh
+    restart: unless-stopped
+
 networks:
   rubezh:
     driver: bridge
