@@ -155,7 +155,11 @@
 - **Архитектурный план:** v1 — 8.7/10 на доработку (3 MAJOR + 8 MINOR); v2 — 9.65/10 принят к реализации; v2.1 — все 7 новых MINOR закрыты в плане.
 - **Фазы (TDD):**
   - **Ф1 AES-GCM crypto** — ✅ закрыта (red `ce6ec58` → green `f4a225c`, 17 sub-тестов зелёные).
-  - **Ф2 миграция 000008 + storage** — pseudonym_mappings/incidents/incident_notes CRUD; расширение audit + chat history.
+  - **Ф2a миграция 000008** — ✅ закрыта (`fd1561c`); применена, verify_schema PASSED.
+  - **Ф2b storage.mapping** — ✅ закрыта (`ef39b1b`, 7 тестов green, LogValuer-redaction).
+  - **Ф2c storage.incidents** — ✅ закрыта (`5dbe161`, 13 тестов green; atomic Tx3, partial unique race, 412 PATCH, append-only notes).
+  - **Ф2d storage.audit расширение** — ListEvents с фильтрами+keyset cursor, GetEvent.
+  - **Ф2e storage.chat расширение** — ListMessages с JOIN sanitization_results (whitelist start/end).
   - **Ф3 оркестратор** — расширение Tx1 (mappings с AAD=sha256(session_id||pseudonym)), auto-incident в Tx3, LogValuer для PseudonymMap, severityFor.
   - **Ф4 HTTP** — 9 эндпойнтов, 2 новых контракта (`audit.schema.json`, `incidents.schema.json`), интеграционные тесты, role-permission, 412/428 PATCH.
 - **Тесты:** см. план §5; audit-replay, авто-создание incidents (deny/escalate/leak), append-only `incident_notes`, отсутствие start/end в истории, `incident_created_auto` в той же Tx что и INSERT incidents.
