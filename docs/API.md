@@ -159,14 +159,19 @@ event: error  data: {"message":"...","request_id":"..."}
 
 | Метод | Путь | Роли | Статус | Назначение |
 |-------|------|------|--------|------------|
-| GET | `/api/models` | any | ✅ 7 | Список провайдеров: тип, trust_level, endpoint, is_enabled |
-| POST | `/api/models` | admin | ✅ 7 | Добавить провайдера (api_key зашифрован, не возвращается) |
-| PATCH | `/api/models/:id` | admin | ✅ 7 | Включить/выключить, переименовать |
-| DELETE | `/api/models/:id` | admin | ✅ 7 | Удалить (soft) |
+| GET | `/api/models` | any | ✅ 7 | Список провайдеров: тип, trust_level, endpoint, is_enabled, has_api_key |
+| POST | `/api/models` | admin | ✅ 7 / 9.5 | Добавить; опц. `api_key` шифруется AES-GCM (AAD=name) |
+| POST | `/api/models/:id/api-key` | admin | ✅ 9.5 | Обновить/очистить per-provider api_key |
+| PATCH | `/api/models/:id` | admin | ☐ | Включить/выключить, переименовать (пост-MVP) |
+| DELETE | `/api/models/:id` | admin | ☐ | Удалить (soft, пост-MVP) |
 
-Поле `api_key` в GET-ответах **никогда не возвращается** (масcкируется
-до `••••` или флага наличия). Чтобы заменить ключ — отправить заново
-в PATCH.
+**API-ключ (Итерация 9.5):** хранится в `model_providers.api_key_encrypted`
+(bytea, AES-256-GCM с AAD = `"model_provider_api_key:" + name`).
+- GET-ответ содержит **только** `has_api_key: bool`; ни plaintext, ни
+  ciphertext не отдаётся.
+- `LLM_API_KEY` env-key — fallback для backward compat (deprecated).
+  Новые провайдеры — с per-provider ключом через `POST /api/models`
+  (поле `api_key`) или `POST /api/models/:id/api-key`.
 
 ## Служебное
 

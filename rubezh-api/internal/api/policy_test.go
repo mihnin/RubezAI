@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/rubezh-ai/rubezh-api/internal/auth"
+	"github.com/rubezh-ai/rubezh-api/internal/crypto"
 	"github.com/rubezh-ai/rubezh-api/internal/storage"
 )
 
@@ -217,6 +218,8 @@ func TestPolicyTestEndpointRejectsUnknownField(t *testing.T) {
 }
 
 // dbRouter строит роутер с реальным Store или пропускает тест без БД.
+// MappingCipher инициализируется детерминированным 32-байтовым ключом
+// (для тестов api_key функциональности Итерации 9.5).
 func dbRouter(t *testing.T) (http.Handler, func()) {
 	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")
@@ -231,10 +234,20 @@ func dbRouter(t *testing.T) (http.Handler, func()) {
 		store.Close()
 		t.Skipf("БД недоступна: %v", err)
 	}
+	testKey := make([]byte, 32)
+	for i := range testKey {
+		testKey[i] = byte(i + 1)
+	}
+	cipher, err := crypto.NewCipher(testKey)
+	if err != nil {
+		store.Close()
+		t.Fatalf("crypto.NewCipher: %v", err)
+	}
 	router, _ := NewRouter(Deps{
-		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Store:      store,
-		AuthSecret: apiTestSecret,
+		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Store:         store,
+		AuthSecret:    apiTestSecret,
+		MappingCipher: cipher,
 	})
 	return router, store.Close
 }

@@ -173,10 +173,16 @@ deny/escalate/leak):
   → `orchestrator.Wait()` — фоновые auto-incident-горутины
   обязательно завершаются (compliance-полнота audit-trail).
 
-Открытый техдолг: только единый `LLM_API_KEY` на все openai-провайдеры
-(пост-MVP, требует зашифрованного поля `api_key` в `model_providers`).
-3 косметических MINOR Итерации 9 + 12 MINOR этапа A (m1-m12) **закрыты**
-(`30c462b`, текущий коммит). См. `docs/PLAN.md` секция «Технический долг».
+Технический долг **полностью закрыт** (Итерация 9.5 и предыдущие коммиты):
+
+- 3 косметических MINOR Итерации 9 — закрыты (`30c462b`);
+- 12 MINOR этапа A (m1-m12) — закрыты (`c02a382`);
+- Единый `LLM_API_KEY` (Итерация 7) — закрыт **Итерацией 9.5**:
+  per-provider зашифрованный `api_key_encrypted` (AES-256-GCM,
+  AAD=name); миграция `000009`; `POST /api/models/:id/api-key`;
+  fallback на env для backward compat.
+
+См. `docs/PLAN.md §«Технический долг»` (всё зачёркнуто).
 
 Идентичность: dev-токен на роль + посев dev-пользователей,
 **фронт-flow зафиксирован**: `localStorage` + `Authorization: Bearer`

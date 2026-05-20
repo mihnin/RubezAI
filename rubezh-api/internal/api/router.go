@@ -50,7 +50,9 @@ func NewRouter(deps Deps) (http.Handler, *chat.Orchestrator) {
 		api.Get("/policies", listPoliciesHandler(deps.Store))
 		api.Post("/policies", createPolicyHandler(deps.Store))
 		api.Get("/models", listModelsHandler(deps.Store))
-		api.Post("/models", createModelHandler(deps.Store))
+		api.Post("/models", createModelHandler(deps.Store, deps.MappingCipher))
+		api.Post("/models/{id}/api-key",
+			updateModelAPIKeyHandler(deps.Store, deps.MappingCipher))
 		api.Get("/chat/sessions", listChatSessionsHandler(deps.Store))
 		api.Post("/chat/sessions", createChatSessionHandler(deps.Store))
 		api.Get("/chat/sessions/{id}/messages",

@@ -44,20 +44,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	providers, err := store.ListModelProviders(ctx)
-	if err != nil {
-		logger.Error("ошибка чтения провайдеров моделей", "error", err)
-		os.Exit(1)
-	}
-	llmRouter := buildRouter(providers, cfg.LLMAPIKey)
-	logger.Info("LLM Router инициализирован", "providers", llmRouter.Count())
-
 	mappingCipher, err := crypto.NewCipher(cfg.MappingEncryptionKey)
 	if err != nil {
 		logger.Error("ошибка инициализации AES-GCM для mapping",
 			"error", err)
 		os.Exit(1)
 	}
+
+	providers, err := store.ListModelProviders(ctx)
+	if err != nil {
+		logger.Error("ошибка чтения провайдеров моделей", "error", err)
+		os.Exit(1)
+	}
+	llmRouter := buildRouter(providers, cfg.LLMAPIKey, mappingCipher, logger)
+	logger.Info("LLM Router инициализирован", "providers", llmRouter.Count())
 
 	handler, orchestrator := api.NewRouter(api.Deps{
 		Logger:        logger,
@@ -108,10 +108,19 @@ func main() {
 // buildRouter регистрирует провайдеров LLM по конфигурации из БД.
 // Отключённые (is_enabled = false) провайдеры пропускаются.
 //
-// MVP-ограничение: все openai_compatible-провайдеры получают общий apiKey
-// (LLM_API_KEY). Отдельный ключ на каждого провайдера — зафиксированный
-// техдолг (docs/PLAN.md, секция «Технический долг»).
-func buildRouter(providers []storage.ModelProvider, apiKey string) *llm.Router {
+// Итерация 9.5: каждый openai_compatible-провайдер использует свой
+// зашифрованный api_key (поле api_key_encrypted, AES-GCM с AAD=name).
+// Если поле NULL/пусто или расшифровка падает — fallback на envFallback
+// (env LLM_API_KEY, deprecated). Это backward-compat для существующих
+// deployments, которые ещё не перевели провайдеров на per-key.
+//
+// Ошибка расшифровки логируется (без plaintext); ключа `redacted`-маркер,
+// инвариант "никакого raw в логах" сохраняется через slog.LogValuer
+// в storage.ModelProvider.
+func buildRouter(
+	providers []storage.ModelProvider, envFallback string,
+	cipher *crypto.Cipher, logger *slog.Logger,
+) *llm.Router {
 	router := llm.NewRouter()
 	for _, provider := range providers {
 		if !provider.IsEnabled {
@@ -119,13 +128,34 @@ func buildRouter(providers []storage.ModelProvider, apiKey string) *llm.Router {
 		}
 		switch provider.Adapter {
 		case "openai_compatible":
+			key := resolveProviderKey(provider, envFallback, cipher, logger)
 			router.Register(llm.NewOpenAIProvider(
-				provider.Name, provider.Endpoint, apiKey))
+				provider.Name, provider.Endpoint, key))
 		default:
 			router.Register(llm.NewMockProvider(provider.Name))
 		}
 	}
 	return router
+}
+
+// resolveProviderKey расшифровывает api_key провайдера или fallback на env.
+// AAD = []byte("model_provider_api_key:" + name) — должно совпадать с
+// тем, что использовалось при шифровании в api/models.go.
+func resolveProviderKey(
+	provider storage.ModelProvider, envFallback string,
+	cipher *crypto.Cipher, logger *slog.Logger,
+) string {
+	if !provider.HasAPIKey() {
+		return envFallback
+	}
+	aad := []byte("model_provider_api_key:" + provider.Name)
+	plain, err := cipher.Decrypt(provider.APIKeyEncrypted, aad)
+	if err != nil {
+		logger.Error("ошибка расшифровки api_key — fallback на env",
+			"provider", provider.Name, "error", err)
+		return envFallback
+	}
+	return string(plain)
 }
 
 // logLevel переводит строковый уровень из конфигурации в slog.Level.

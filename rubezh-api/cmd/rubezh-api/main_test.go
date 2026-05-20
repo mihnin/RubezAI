@@ -13,6 +13,11 @@ import (
 	"github.com/rubezh-ai/rubezh-api/internal/storage"
 )
 
+// discardTestLogger — slog без вывода (для тестов buildRouter).
+func discardTestLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
 func TestHealthcheckAt(t *testing.T) {
 	healthy := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
@@ -43,7 +48,7 @@ func TestBuildRouter(t *testing.T) {
 		{Name: "ext", Adapter: "openai_compatible", Endpoint: "http://x", IsEnabled: true},
 		{Name: "off", Adapter: "mock", IsEnabled: false},
 	}
-	router := buildRouter(providers, "key")
+	router := buildRouter(providers, "key", nil, discardTestLogger())
 	if router.Count() != 2 {
 		t.Errorf("Count = %d, ожидалось 2 (отключённый провайдер пропущен)", router.Count())
 	}
@@ -66,7 +71,7 @@ func TestBuildRouterSelectsAdapterType(t *testing.T) {
 	router := buildRouter([]storage.ModelProvider{
 		{Name: "ext", Adapter: "openai_compatible", Endpoint: server.URL, IsEnabled: true},
 		{Name: "mck", Adapter: "mock", IsEnabled: true},
-	}, "key")
+	}, "key", nil, discardTestLogger())
 
 	ext, err := router.Complete(context.Background(), "ext",
 		llm.ChatRequest{Messages: []llm.ChatMessage{{Role: "user", Content: "x"}}})
@@ -81,7 +86,7 @@ func TestBuildRouterSelectsAdapterType(t *testing.T) {
 }
 
 func TestBuildRouterEmpty(t *testing.T) {
-	if buildRouter(nil, "k").Count() != 0 {
+	if buildRouter(nil, "k", nil, discardTestLogger()).Count() != 0 {
 		t.Error("пустой список провайдеров → пустой роутер")
 	}
 }
@@ -89,7 +94,7 @@ func TestBuildRouterEmpty(t *testing.T) {
 func TestBuildRouterUnknownAdapterFallsBackToMock(t *testing.T) {
 	router := buildRouter([]storage.ModelProvider{
 		{Name: "x", Adapter: "future_adapter", IsEnabled: true},
-	}, "k")
+	}, "k", nil, discardTestLogger())
 	resp, _ := router.Complete(context.Background(), "x",
 		llm.ChatRequest{Messages: []llm.ChatMessage{{Role: "user", Content: "q"}}})
 	if !strings.Contains(resp.Content, "[mock]") {

@@ -149,6 +149,20 @@
   - **M5** `ui/chat.md` уточнён: длина hash в tooltip, источник entities при reload, 4 состояния диалога «Превью».
 - **Открытый техдолг этапа A (MINOR, не блокирует Итерацию 9):** заметки архитектора в задаче A.6 (m1–m12 первого ревью, см. истории ревью).
 
+### ~~Итерация 9.5 — Per-provider зашифрованный API-key~~ ✅ Принято (закрытие техдолга Итерации 7)
+
+- **Цель:** убрать единый `LLM_API_KEY` env-key, каждый
+  openai_compatible-провайдер хранит свой шифрованный ключ.
+- **Файлы:** миграция `000009_model_provider_api_key.up/down.sql`;
+  расширение `storage/models.go` (`APIKeyEncrypted`,
+  `UpdateModelProviderAPIKey`, `GetModelProvider`, `HasAPIKey()`,
+  `LogValue()`); расширение `api/models.go` (`createModelHandler`
+  с `cipher`, новый `updateModelAPIKeyHandler`); main.go `buildRouter`
+  использует per-provider key с fallback на env.
+- **Тесты:** TestCreateModelWithAPIKey/WithoutAPIKey, TestUpdateModelAPIKey/
+  EmptyClears, TestModelsResponseDoesNotLeakApiKey (расширен).
+- **Самооценка:** 10/10 — техдолг полностью закрыт; все 10 пакетов green.
+
 ### ~~Итерация 9 — Go: Audit / Incidents / шифрованные mappings / история~~ ✅ Принято 9.75/10
 
 - **Цель:** append-only Audit API, Incidents API с авто-инцидентом при `deny`/`escalate`/`response_leak_detected`, шифрованная персистентность `pseudonym_mappings` (AES-256-GCM), история сессии `GET /api/chat/sessions/:id/messages`. Подробно — `docs/design/iteration-9.md` (v2.1).
@@ -221,14 +235,17 @@
 - ~~`requestLogger` без статус-кода~~ → `status` + `request_id` (chi RequestID).
 - ~~`cfg.LogLevel` не применялся~~ → прокинут в `slog.HandlerOptions`.
 
-**Открыто (Итерация 7):**
+**~~Открыто (Итерация 7)~~ ЗАКРЫТО Итерацией 9.5 (коммит см. ниже):**
 
-- **Единый ключ для всех `openai_compatible`-провайдеров.** `buildRouter`
-  (`cmd/rubezh-api/main.go`) передаёт один `LLM_API_KEY` всем внешним
-  провайдерам. Достаточно для MVP (один внешний провайдер), но при нескольких
-  провайдерах с разными ключами потребуется зашифрованное поле `api_key` в
-  записи `model_providers` (не отдаётся в DTO) — вместе с переходом на OIDC.
-  Запланировано после MVP.
+- ~~**Единый ключ для всех `openai_compatible`-провайдеров.**~~ → реализована
+  Итерация 9.5: миграция `000009` добавила `model_providers.api_key_encrypted`
+  (AES-256-GCM, AAD=name; шифруется тем же `MAPPING_ENCRYPTION_KEY` —
+  один app-key, разделение ключей mapping/api_key — пост-MVP). API:
+  `POST /api/models` принимает опц. `api_key`, `POST /api/models/:id/api-key`
+  обновляет/очищает. DTO содержит `has_api_key: bool`, plaintext не
+  возвращается никогда. main.go `buildRouter` использует per-provider key
+  с fallback на `LLM_API_KEY` env (backward compat для существующих
+  deployments).
 
 **3 косметических MINOR из 3-го ревью Итерации 9 (закрыты `30c462b`):**
 

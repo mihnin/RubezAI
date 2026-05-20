@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -13,27 +15,57 @@ import (
 var ErrModelProviderExists = errors.New(
 	"storage: провайдер модели с таким именем уже существует")
 
+// ErrModelProviderNotFound — провайдер не найден.
+var ErrModelProviderNotFound = errors.New(
+	"storage: провайдер модели не найден")
+
 // ModelProvider — запись провайдера модели из таблицы model_providers.
 // MaxTokens и RateLimitPerMin nullable: nil означает «без ограничения».
+// APIKeyEncrypted — AES-256-GCM зашифрованный API-ключ (миграция 000009);
+// NULL/пусто означает «использовать env-fallback LLM_API_KEY» (deprecated).
+// Поле не возвращается в публичных DTO; LogValue() гарантирует, что
+// шифротекст не попадёт в логи (инвариант "никакого raw в логах").
 type ModelProvider struct {
-	ID              string
-	Name            string
-	TrustLevel      string
-	Adapter         string
-	Endpoint        string
-	MaxTokens       *int
-	RateLimitPerMin *int
-	IsEnabled       bool
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	ID                string
+	Name              string
+	TrustLevel        string
+	Adapter           string
+	Endpoint          string
+	MaxTokens         *int
+	RateLimitPerMin   *int
+	IsEnabled         bool
+	APIKeyEncrypted   []byte
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
+
+// HasAPIKey — есть ли зашифрованный ключ (для DTO и main-логики).
+func (p ModelProvider) HasAPIKey() bool {
+	return len(p.APIKeyEncrypted) > 0
+}
+
+// LogValue реализует slog.LogValuer — APIKeyEncrypted (ciphertext)
+// никогда не попадает в логи, только агрегат.
+func (p ModelProvider) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("id", p.ID),
+		slog.String("name", p.Name),
+		slog.String("trust_level", p.TrustLevel),
+		slog.String("adapter", p.Adapter),
+		slog.Bool("has_api_key", p.HasAPIKey()),
+		slog.Bool("is_enabled", p.IsEnabled),
+	)
+}
+
+// modelProviderColumns — список колонок SELECT (один источник для list/get).
+const modelProviderColumns = `id, name, trust_level, adapter,
+	COALESCE(endpoint, ''), max_tokens, rate_limit_per_min, is_enabled,
+	api_key_encrypted, created_at, updated_at`
 
 // ListModelProviders возвращает провайдеров моделей, отсортированных по имени.
 func (s *Storage) ListModelProviders(ctx context.Context) ([]ModelProvider, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, name, trust_level, adapter, COALESCE(endpoint, ''),
-		        max_tokens, rate_limit_per_min, is_enabled, created_at, updated_at
-		 FROM model_providers ORDER BY name`)
+		`SELECT `+modelProviderColumns+` FROM model_providers ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("storage: список провайдеров: %w", err)
 	}
@@ -45,7 +77,7 @@ func (s *Storage) ListModelProviders(ctx context.Context) ([]ModelProvider, erro
 		if err := rows.Scan(
 			&p.ID, &p.Name, &p.TrustLevel, &p.Adapter, &p.Endpoint,
 			&p.MaxTokens, &p.RateLimitPerMin, &p.IsEnabled,
-			&p.CreatedAt, &p.UpdatedAt,
+			&p.APIKeyEncrypted, &p.CreatedAt, &p.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("storage: чтение строки провайдера: %w", err)
 		}
@@ -57,19 +89,46 @@ func (s *Storage) ListModelProviders(ctx context.Context) ([]ModelProvider, erro
 	return providers, nil
 }
 
+// GetModelProvider читает провайдера по id; ErrModelProviderNotFound если нет.
+func (s *Storage) GetModelProvider(
+	ctx context.Context, id string,
+) (ModelProvider, error) {
+	var p ModelProvider
+	err := s.pool.QueryRow(ctx,
+		`SELECT `+modelProviderColumns+` FROM model_providers WHERE id = $1`,
+		id,
+	).Scan(&p.ID, &p.Name, &p.TrustLevel, &p.Adapter, &p.Endpoint,
+		&p.MaxTokens, &p.RateLimitPerMin, &p.IsEnabled,
+		&p.APIKeyEncrypted, &p.CreatedAt, &p.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ModelProvider{}, ErrModelProviderNotFound
+	}
+	if err != nil {
+		return ModelProvider{}, fmt.Errorf("storage: get provider: %w", err)
+	}
+	return p, nil
+}
+
 // CreateModelProvider создаёт провайдера модели. Пустой Endpoint сохраняется
-// как NULL.
+// как NULL. APIKeyEncrypted (если не пустой) шифруется уже на стороне
+// вызывающего (внутри api/models.go cipher.Encrypt с AAD=name); storage
+// просто пишет байты.
 func (s *Storage) CreateModelProvider(
 	ctx context.Context, input ModelProvider,
 ) (ModelProvider, error) {
 	created := input
+	var apiKey []byte
+	if len(input.APIKeyEncrypted) > 0 {
+		apiKey = input.APIKeyEncrypted
+	}
 	err := s.pool.QueryRow(ctx,
 		`INSERT INTO model_providers
-		   (name, trust_level, adapter, endpoint, max_tokens, rate_limit_per_min)
-		 VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6)
+		   (name, trust_level, adapter, endpoint, max_tokens,
+		    rate_limit_per_min, api_key_encrypted)
+		 VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7)
 		 RETURNING id, is_enabled, created_at, updated_at`,
 		input.Name, input.TrustLevel, input.Adapter, input.Endpoint,
-		input.MaxTokens, input.RateLimitPerMin,
+		input.MaxTokens, input.RateLimitPerMin, apiKey,
 	).Scan(&created.ID, &created.IsEnabled, &created.CreatedAt, &created.UpdatedAt)
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -79,4 +138,27 @@ func (s *Storage) CreateModelProvider(
 		return ModelProvider{}, fmt.Errorf("storage: создание провайдера: %w", err)
 	}
 	return created, nil
+}
+
+// UpdateModelProviderAPIKey обновляет зашифрованный ключ провайдера.
+// encrypted = nil/пусто → ключ становится NULL (использовать env-fallback).
+// AAD при шифровании привязан к name — если name меняется, ключ
+// нужно перевыпустить.
+func (s *Storage) UpdateModelProviderAPIKey(
+	ctx context.Context, id string, encrypted []byte,
+) error {
+	var apiKey []byte
+	if len(encrypted) > 0 {
+		apiKey = encrypted
+	}
+	cmd, err := s.pool.Exec(ctx,
+		`UPDATE model_providers SET api_key_encrypted = $1 WHERE id = $2`,
+		apiKey, id)
+	if err != nil {
+		return fmt.Errorf("storage: обновление api_key: %w", err)
+	}
+	if cmd.RowsAffected() == 0 {
+		return ErrModelProviderNotFound
+	}
+	return nil
 }

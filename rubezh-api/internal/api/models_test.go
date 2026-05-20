@@ -302,10 +302,16 @@ func TestModelsResponseDoesNotLeakApiKey(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	raw := rec.Body.String()
-	for _, leak := range []string{"Bearer", "api_key", "apiKey"} {
+	// has_api_key (bool флаг) — публичен в Итерации 9.5;
+	// сам ключ (как поле "api_key": или его ciphertext) не должен быть.
+	for _, leak := range []string{"Bearer", `"api_key"`, "apiKey",
+		"api_key_encrypted"} {
 		if strings.Contains(raw, leak) {
 			t.Errorf("ответ /api/models содержит подозрительную подстроку %q", leak)
 		}
+	}
+	if !strings.Contains(raw, `"has_api_key":`) {
+		t.Errorf("ответ /api/models должен содержать has_api_key: %s", raw)
 	}
 }
 
