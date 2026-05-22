@@ -116,9 +116,6 @@ func (c *cli) cmdLogin(args []string) error {
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, bodyText(resp))
 	}
-	var out struct {
-		Token, Role, UserID, ExpiresAt string `json:"token,role,user_id,expires_at"`
-	}
 	type loginResp struct {
 		Token     string `json:"token"`
 		Role      string `json:"role"`
@@ -132,7 +129,6 @@ func (c *cli) cmdLogin(args []string) error {
 	if err := saveToken(lr.Token); err != nil {
 		return err
 	}
-	_ = out
 	fmt.Printf("✓ вход как %s (user_id=%s, expires_at=%s)\n",
 		lr.Role, lr.UserID[:8], lr.ExpiresAt)
 	fmt.Printf("  токен сохранён в ~/%s\n", tokenFile)

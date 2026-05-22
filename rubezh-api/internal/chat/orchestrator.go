@@ -83,10 +83,10 @@ func classifyLLMError(err error, content string) string {
 
 // Wait блокирует до завершения всех фоновых задач (auto-incident
 // после sink.Done). Вызывается:
-// 1) в тестах после Handle для детерминизма проверок аудита;
-// 2) в cmd/rubezh-api/main.go после srv.Shutdown — без этого
-//    Tx3 (CreateAutoIncident) может оборваться при перезапуске
-//    сервиса, нарушив compliance-инвариант полноты audit-trail.
+//  1. в тестах после Handle для детерминизма проверок аудита;
+//  2. в cmd/rubezh-api/main.go после srv.Shutdown — без этого
+//     Tx3 (CreateAutoIncident) может оборваться при перезапуске
+//     сервиса, нарушив compliance-инвариант полноты audit-trail.
 func (o *Orchestrator) Wait() { o.asyncWG.Wait() }
 
 // goAsync — запускает фоновую задачу с трекингом через asyncWG.

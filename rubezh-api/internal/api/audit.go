@@ -302,9 +302,9 @@ func getAuditEventHandler(store *storage.Storage) http.HandlerFunc {
 // MAJOR-1 финального ревью Итерации 9 — раньше filters записывались в
 // audit-event но игнорировались, что было compliance-ловушкой).
 type auditExportRequestDTO struct {
-	Format         string              `json:"format"`
-	IncludePayload *bool               `json:"include_payload"`
-	Filters        *exportFiltersDTO   `json:"filters"`
+	Format         string            `json:"format"`
+	IncludePayload *bool             `json:"include_payload"`
+	Filters        *exportFiltersDTO `json:"filters"`
 }
 
 type exportFiltersDTO struct {

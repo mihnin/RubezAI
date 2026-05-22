@@ -14,9 +14,9 @@ import (
 )
 
 type fakeDevLoginStore struct {
-	userID  string
-	err     error
-	asked   string
+	userID string
+	err    error
+	asked  string
 }
 
 func (f *fakeDevLoginStore) UserIDForRole(_ context.Context, role string) (string, error) {

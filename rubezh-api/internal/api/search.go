@@ -76,10 +76,10 @@ func searchHandler(
 		_, _ = store.InsertAuditEvent(r.Context(), storage.AuditEvent{
 			UserID: userID, EventType: "search_performed",
 			Detail: map[string]any{
-				"query_hash":         hex.EncodeToString(queryHash[:8]),
-				"result_count":       len(results),
-				"has_sanitized_pii":  hasPII,
-				"sanitized_only":     sanClient != nil,
+				"query_hash":        hex.EncodeToString(queryHash[:8]),
+				"result_count":      len(results),
+				"has_sanitized_pii": hasPII,
+				"sanitized_only":    sanClient != nil,
 			},
 		})
 

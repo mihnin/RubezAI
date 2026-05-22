@@ -189,7 +189,7 @@ func (s *Storage) ListDocuments(
 	return out, rows.Err()
 }
 
-// SoftDeleteDocument: status='deleted', storage_key=''
+// SoftDeleteDocument: status='deleted', storage_key=”
 // (план iteration-10 §Р3.1). raw уже удалён из MinIO handler'ом.
 func (s *Storage) SoftDeleteDocument(ctx context.Context, id string) error {
 	cmd, err := s.pool.Exec(ctx,

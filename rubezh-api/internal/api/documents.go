@@ -22,8 +22,8 @@ const (
 )
 
 var allowedDocumentMIMEs = map[string]bool{
-	"application/pdf":            true,
-	"application/octet-stream":   true, // некоторые браузеры
+	"application/pdf":          true,
+	"application/octet-stream": true, // некоторые браузеры
 	"application/vnd.openxmlformats-officedocument.wordprocessingml.document": true,
 }
 
@@ -68,7 +68,7 @@ func documentToDTO(d storage.Document) documentDTO {
 		ID: d.ID, OwnerID: d.OwnerID, Filename: d.Filename,
 		ContentType: d.ContentType, SizeBytes: d.SizeBytes,
 		Status: d.Status, Phase: d.Phase, Error: d.Error,
-		ProcessingAttempts: d.ProcessingAttempts,
+		ProcessingAttempts:  d.ProcessingAttempts,
 		ProcessingStartedAt: d.ProcessingStartedAt,
 		CreatedAt:           d.CreatedAt, UpdatedAt: d.UpdatedAt,
 	}
