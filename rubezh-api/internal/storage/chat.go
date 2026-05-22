@@ -13,6 +13,46 @@ import (
 // ErrChatSessionNotFound — чат-сессия с указанным id не найдена.
 var ErrChatSessionNotFound = errors.New("storage: чат-сессия не найдена")
 
+// ErrChatMessageNotFound — сообщение (или его контекст обезличивания) не найдено.
+var ErrChatMessageNotFound = errors.New("storage: сообщение чата не найдено")
+
+// RevealContext — данные для раскрытия псевдонимов в ответе ассистента (J.2):
+// текст ответа + владелец сессии + ссылка на mapping'и парного user-сообщения.
+type RevealContext struct {
+	SessionID            string
+	OwnerUserID          string
+	AssistantContent     string
+	SanitizationResultID string
+}
+
+// GetRevealContext по id сообщения АССИСТЕНТА находит цепочку
+// assistant → (тот же request_id) user-сообщение → sanitization_result.
+// Возвращает текст ответа, владельца сессии и sanitization_result_id для
+// чтения pseudonym_mappings. ErrChatMessageNotFound — если цепочка не найдена.
+func (s *Storage) GetRevealContext(
+	ctx context.Context, assistantMessageID string,
+) (RevealContext, error) {
+	var rc RevealContext
+	err := s.pool.QueryRow(ctx,
+		`SELECT a.session_id, sess.user_id, a.content, sr.id
+		   FROM chat_messages a
+		   JOIN chat_sessions sess ON sess.id = a.session_id
+		   JOIN chat_messages u ON u.session_id = a.session_id
+		        AND u.request_id = a.request_id AND u.role = 'user'
+		   JOIN sanitization_results sr ON sr.message_id = u.id
+		  WHERE a.id = $1 AND a.role = 'assistant'`,
+		assistantMessageID,
+	).Scan(&rc.SessionID, &rc.OwnerUserID, &rc.AssistantContent,
+		&rc.SanitizationResultID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return RevealContext{}, ErrChatMessageNotFound
+	}
+	if err != nil {
+		return RevealContext{}, fmt.Errorf("storage: reveal-контекст: %w", err)
+	}
+	return rc, nil
+}
+
 // ChatSession — запись таблицы chat_sessions.
 type ChatSession struct {
 	ID        string

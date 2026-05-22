@@ -71,6 +71,8 @@ func NewRouter(deps Deps) (http.Handler, *chat.Orchestrator) {
 		api.Post("/chat/sessions", createChatSessionHandler(deps.Store))
 		api.Get("/chat/sessions/{id}/messages",
 			listChatMessagesHandler(deps.Store))
+		api.Post("/chat/messages/{id}/reveal",
+			revealChatHandler(deps.Store, deps.MappingCipher, deps.Logger))
 		api.Post("/chat/preview", previewChatHandler(
 			orchestrator, deps.Store, deps.Router, deps.Logger))
 		api.Post("/chat", chatHandler(
