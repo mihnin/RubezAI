@@ -230,6 +230,14 @@ frontend кнопка SSO. K.2 — CLI `rubezh login --sso` (loopback как gcl
 cli_redirect только на loopback). Внешние LLM по-прежнему по API-ключам
 (потребительский чат через логин — невозможно/ToS). Раздел «Помощь» (`/help`).
 
+**L — персональные ключи провайдеров (учётка на пользователя):** сотрудник
+подключает свой API-ключ к облачному провайдеру (раздел «Мои ключи»); в чате
+запрос идёт под его ключом поверх org-ключа (fail-closed → org). Таблица
+`user_provider_credentials` (миграция 000014), ключ AES-256-GCM с
+AAD=user_id+provider_id, `llm.ChatRequest.APIKeyOverride`, `/api/me/credentials`
+(только свои, ключ наружу не отдаётся), audit `provider_credential_added/removed`.
+trust_level/endpoint не меняются — masking-инвариант сохранён.
+
 **H.3 — LLM-обезличивание (фильтр 2/3):** локальная русскоязычная LLM
 (LM Studio / DeepSeek-7B) подключена через `app/llm_review/` как `Detector`,
 дополняя детерминированные детекторы и **не принимая** решений allow/deny.
