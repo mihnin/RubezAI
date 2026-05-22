@@ -8,6 +8,7 @@ import {
   AlertTriangle,
   LogOut,
   ShieldCheck,
+  HelpCircle,
 } from "lucide-react";
 import { useAuth } from "../auth/context";
 
@@ -18,6 +19,7 @@ const NAV = [
   { to: "/models", label: "Модели", icon: Cpu },
   { to: "/audit-log", label: "Аудит", icon: ClipboardList },
   { to: "/incidents", label: "Инциденты", icon: AlertTriangle },
+  { to: "/help", label: "Помощь", icon: HelpCircle },
 ];
 
 export default function AppLayout() {

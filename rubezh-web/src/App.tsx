@@ -7,6 +7,7 @@ import PoliciesPage from "./pages/PoliciesPage";
 import ModelsPage from "./pages/ModelsPage";
 import AuditLogPage from "./pages/AuditLogPage";
 import IncidentsPage from "./pages/IncidentsPage";
+import HelpPage from "./pages/HelpPage";
 import AppLayout from "./components/AppLayout";
 
 export default function App() {
@@ -27,6 +28,7 @@ export default function App() {
         <Route path="/models" element={<ModelsPage />} />
         <Route path="/audit-log" element={<AuditLogPage />} />
         <Route path="/incidents" element={<IncidentsPage />} />
+        <Route path="/help" element={<HelpPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
