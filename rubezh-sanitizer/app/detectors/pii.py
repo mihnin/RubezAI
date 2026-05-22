@@ -125,9 +125,23 @@ def pii_detectors() -> list[RegexDetector]:
             name="snils", entity_type=EntityType.SNILS, category=pii,
             pattern=r"\b\d{3}-\d{3}-\d{3}[\s\-]\d{2}\b", validator=validate_snils,
         ),
+        # Контекстный СНИЛС: формат после метки «СНИЛС» — даже при невалидной
+        # контрольной сумме (см. inn_labeled).
+        RegexDetector(
+            name="snils_labeled", entity_type=EntityType.SNILS, category=pii,
+            pattern=r"(?i)\bСНИЛС\s*№?\s*:?\s*(\d{3}-\d{3}-\d{3}[\s\-]\d{2})\b",
+            group=1, confidence=0.9,
+        ),
         RegexDetector(
             name="inn", entity_type=EntityType.INN, category=pii,
             pattern=r"\b\d{12}\b|\b\d{10}\b", validator=validate_inn,
+        ),
+        # Контекстный ИНН: число после метки «ИНН» ловится даже при невалидной
+        # контрольной сумме — метка сама по себе сильный сигнал. group=1 →
+        # маскируется только число, без ключевого слова.
+        RegexDetector(
+            name="inn_labeled", entity_type=EntityType.INN, category=pii,
+            pattern=r"(?i)\bИНН\s*№?\s*:?\s*(\d{12}|\d{10})\b", group=1, confidence=0.9,
         ),
         RegexDetector(
             name="ogrn", entity_type=EntityType.OGRN, category=pii,

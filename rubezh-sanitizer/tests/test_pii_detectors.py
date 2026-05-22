@@ -103,6 +103,28 @@ def test_bank_card_does_not_match_20_digit_account() -> None:
     assert EntityType.ACCOUNT in _types(matches)
 
 
+def test_detect_labeled_inn_without_valid_checksum() -> None:
+    # Число, явно помеченное «ИНН», ловится по контексту даже при невалидной
+    # контрольной сумме (синтетические данные договора). Маскируется само число.
+    matches = scan("ИНН 770100100100, прочее")
+    inn = next((m for m in matches if m.type == EntityType.INN), None)
+    assert inn is not None
+    assert inn.value == "770100100100"
+
+
+def test_detect_labeled_snils_without_valid_checksum() -> None:
+    matches = scan("СНИЛС 123-456-789 00 в анкете")
+    snils = next((m for m in matches if m.type == EntityType.SNILS), None)
+    assert snils is not None
+    assert snils.value == "123-456-789 00"
+
+
+def test_unlabeled_invalid_inn_still_not_detected() -> None:
+    # Без метки и без валидной контрольной суммы 12-значное число не ИНН —
+    # точность контекстного детектора не размывается.
+    assert EntityType.INN not in _types(scan("число 770100100100 в журнале"))
+
+
 def test_detect_passport_with_number_sign() -> None:
     # Паспорт в формате «серия № номер» (как в договоре) ловится со знаком №.
     matches = scan("паспорт серии 4501 № 234567 выдан ОВД")

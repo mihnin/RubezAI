@@ -80,6 +80,14 @@ services:
     environment:
       SANITIZER_PORT: 8001
       MAPPING_ENCRYPTION_KEY: ${MAPPING_ENCRYPTION_KEY:-}
+      # LLM-review (фильтр 2/3). Пусто → фильтр отключён (только regex).
+      # Из контейнера локальная LM Studio доступна как host.docker.internal.
+      SANITIZER_LLM_URL: ${SANITIZER_LLM_URL:-}
+      SANITIZER_LLM_MODEL: ${SANITIZER_LLM_MODEL:-}
+      SANITIZER_LLM_KEY: ${SANITIZER_LLM_KEY:-}
+      SANITIZER_LLM_TIMEOUT: ${SANITIZER_LLM_TIMEOUT:-5.0}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${SANITIZER_PORT:-8001}:8001"
     healthcheck:

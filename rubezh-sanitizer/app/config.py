@@ -21,5 +21,12 @@ class Settings(BaseSettings):
         default="", validation_alias="MAPPING_ENCRYPTION_KEY"
     )
 
+    # LLM-review (фильтр 2/3). Все поля опциональны: пустой llm_url → фильтр
+    # отключён, пайплайн работает на одних детерминированных детекторах.
+    llm_url: str = ""
+    llm_model: str = ""
+    llm_key: str = ""
+    llm_timeout: float = 5.0
+
 
 settings = Settings()

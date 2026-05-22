@@ -9,7 +9,7 @@ from fastapi import FastAPI
 
 from app.api.routes import router
 from app.config import settings
-from app.deps import build_cipher
+from app.deps import build_cipher, build_llm_detector
 
 
 @asynccontextmanager
@@ -20,6 +20,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     контролируемом старте приложения, а не при импорте модуля.
     """
     app.state.cipher = build_cipher()
+    app.state.llm_detector = build_llm_detector()
     yield
 
 

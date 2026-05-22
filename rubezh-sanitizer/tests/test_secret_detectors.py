@@ -78,6 +78,20 @@ def test_password_value_stops_at_whitespace() -> None:
     assert found.value == "qwerty"
 
 
+def test_detect_password_with_words_before_separator() -> None:
+    # «пароль <слова>: <значение>» — ключевое слово не вплотную к двоеточию
+    # (как в реальном договоре). Значение извлекается, ключевые слова — нет.
+    text = "Внутренний пароль доступа для тестирования: TestPass!2026-Secret-Key (NDA)"
+    found = next(m for m in scan(text) if m.type == EntityType.SECRET_PASSWORD)
+    assert found.value == "TestPass!2026-Secret-Key"
+    assert text[found.start : found.end] == found.value
+
+
+def test_password_short_word_after_keyword_is_not_secret() -> None:
+    # короткое обычное слово после «пароль …:» не принимается за секрет (<6 симв.)
+    assert EntityType.SECRET_PASSWORD not in _types(scan("пароль в форме входа: ниже"))
+
+
 def test_password_in_multiline_config() -> None:
     config = "user=admin\npassword=Secret123\nhost=db.local"
     found = next(m for m in scan(config) if m.type == EntityType.SECRET_PASSWORD)
