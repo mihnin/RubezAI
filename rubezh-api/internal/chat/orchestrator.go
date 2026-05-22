@@ -319,7 +319,7 @@ func (o *Orchestrator) runLLM(
 			return fmt.Errorf("chat: отправка delta: %w", err)
 		}
 	}
-	doneErr := sink.Done(req.RequestID)
+	doneErr := sink.Done(req.RequestID, terminationIDs.AssistantMessageID)
 
 	// Авто-инцидент при response_leak_detected (план §Р4) — В ГОРУТИНЕ
 	// ПОСЛЕ sink.Done (закрытие MAJOR-3 ревью реализации Итерации 9:
@@ -357,7 +357,7 @@ func (o *Orchestrator) finishBlocked(
 		return sink.Fail("ошибка записи блокировки", req.RequestID)
 	}
 
-	doneErr := sink.Done(req.RequestID)
+	doneErr := sink.Done(req.RequestID, terminationIDs.AssistantMessageID)
 
 	// Авто-инцидент при deny/escalate (план §Р4) — в горутине после
 	// sink.Done; см. комментарий в runLLM (MAJOR-3 ревью).

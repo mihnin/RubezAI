@@ -37,7 +37,9 @@ type Store interface {
 type EventSink interface {
 	Meta(m MetaEvent) error
 	Delta(content string) error
-	Done(requestID string) error
+	// Done завершает поток. assistantMessageID — id записанного сообщения
+	// ассистента (для последующего reveal); пуст для путей без записи.
+	Done(requestID, assistantMessageID string) error
 	Fail(message, requestID string) error
 }
 

@@ -140,11 +140,12 @@ func (f *fakeStore) incidentsCount() int {
 }
 
 type fakeSink struct {
-	meta     *MetaEvent
-	deltas   []string
-	doneID   string
-	failMsg  string
-	failedID string
+	meta      *MetaEvent
+	deltas    []string
+	doneID    string
+	doneMsgID string
+	failMsg   string
+	failedID  string
 }
 
 func (f *fakeSink) Meta(m MetaEvent) error { f.meta = &m; return nil }
@@ -152,7 +153,11 @@ func (f *fakeSink) Delta(content string) error {
 	f.deltas = append(f.deltas, content)
 	return nil
 }
-func (f *fakeSink) Done(requestID string) error { f.doneID = requestID; return nil }
+func (f *fakeSink) Done(requestID, assistantMessageID string) error {
+	f.doneID = requestID
+	f.doneMsgID = assistantMessageID
+	return nil
+}
 func (f *fakeSink) Fail(message, requestID string) error {
 	f.failMsg = message
 	f.failedID = requestID

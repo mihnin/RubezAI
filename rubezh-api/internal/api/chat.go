@@ -106,6 +106,8 @@ type sseDeltaPayload struct {
 
 type sseDonePayload struct {
 	RequestID string `json:"request_id"`
+	// AssistantMessageID — id сообщения ассистента для последующего reveal (J.2).
+	AssistantMessageID string `json:"assistant_message_id"`
 }
 
 // sseErrorPayload — терминальный SSE-event error. RequestID присутствует
@@ -202,8 +204,10 @@ func (s *sseSink) Delta(content string) error {
 	return s.writeEvent("delta", sseDeltaPayload{Content: content})
 }
 
-func (s *sseSink) Done(requestID string) error {
-	return s.writeEvent("done", sseDonePayload{RequestID: requestID})
+func (s *sseSink) Done(requestID, assistantMessageID string) error {
+	return s.writeEvent("done", sseDonePayload{
+		RequestID: requestID, AssistantMessageID: assistantMessageID,
+	})
 }
 
 func (s *sseSink) Fail(message, requestID string) error {

@@ -159,9 +159,13 @@
       "type": "object",
       "description": "payload события done — терминальное, успешное завершение",
       "additionalProperties": false,
-      "required": ["request_id"],
+      "required": ["request_id", "assistant_message_id"],
       "properties": {
-        "request_id": { "type": "string" }
+        "request_id": { "type": "string" },
+        "assistant_message_id": {
+          "type": "string",
+          "description": "id сообщения ассистента для POST /api/chat/messages/{id}/reveal (J.2); пуст для путей без записи"
+        }
       }
     },
     "SseError": {

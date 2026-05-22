@@ -84,7 +84,7 @@ func (f *fakeChatOrchestrator) Stream(
 		return sink.Fail("тестовый сбой", req.RequestID)
 	}
 	_ = sink.Delta("тестовый ответ")
-	if err := sink.Done(req.RequestID); err != nil {
+	if err := sink.Done(req.RequestID, "msg-a"); err != nil {
 		return err
 	}
 	return f.streamErr

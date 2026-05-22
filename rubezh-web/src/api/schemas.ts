@@ -34,6 +34,8 @@ export const ChatDeltaPayloadSchema = z.object({
 
 export const ChatDonePayloadSchema = z.object({
   request_id: z.string(),
+  // id сообщения ассистента для reveal (J.2); старые потоки могут не слать
+  assistant_message_id: z.string().optional().default(""),
 });
 
 export const ChatErrorPayloadSchema = z.object({
