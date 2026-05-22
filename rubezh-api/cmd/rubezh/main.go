@@ -6,7 +6,10 @@
 //	rubezh login --sso                          # вход через браузер (OIDC, K.2)
 //	rubezh chat --provider deepseek-cloud --model deepseek-chat "Привет"
 //	rubezh models list
-//	rubezh models set-key NAME --key sk-...
+//	rubezh models set-key NAME --key sk-...        # org-ключ провайдера
+//	rubezh models enable google-gemini             # включить провайдера
+//	rubezh keys add google-gemini --key AIza...    # СВОЙ персональный ключ
+//	rubezh keys list                               # мои персональные ключи
 //	rubezh docs upload ./contract.pdf
 //	rubezh docs list
 //	rubezh audit list --type chat_request
@@ -86,6 +89,8 @@ func main() {
 		err = c.cmdChat(rest)
 	case "models":
 		err = c.cmdModels(rest)
+	case "keys":
+		err = c.cmdKeys(rest)
 	case "docs":
 		err = c.cmdDocs(rest)
 	case "audit":
@@ -322,16 +327,36 @@ func dispatchSSE(name, data string) {
 
 func (c *cli) cmdModels(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: rubezh models list | set-key NAME --key K")
+		return errors.New(
+			"usage: rubezh models list | set-key NAME --key K | enable NAME | disable NAME")
 	}
 	switch args[0] {
 	case "list":
 		return c.modelsList()
 	case "set-key":
 		return c.modelsSetKey(args[1:])
+	case "enable", "disable":
+		return c.modelsToggle(args[0], args[1:])
 	default:
 		return fmt.Errorf("неизвестная подкоманда: %s", args[0])
 	}
+}
+
+// modelsToggle включает/выключает провайдера (PATCH /api/models/:id).
+func (c *cli) modelsToggle(action string, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("укажите имя: models %s NAME", action)
+	}
+	id, err := c.providerID(args[0])
+	if err != nil {
+		return err
+	}
+	body, _ := json.Marshal(map[string]bool{"is_enabled": action == "enable"})
+	if err := c.sendJSON("PATCH", "/api/models/"+id, body); err != nil {
+		return err
+	}
+	fmt.Printf("✓ провайдер %s: %s\n", args[0], action+"d")
+	return nil
 }
 
 func (c *cli) modelsList() error {
@@ -371,13 +396,13 @@ func (c *cli) modelsList() error {
 }
 
 func (c *cli) modelsSetKey(args []string) error {
-	fs := flag.NewFlagSet("models set-key", flag.ExitOnError)
-	key := fs.String("key", "", "API-ключ (или $ENV)")
-	_ = fs.Parse(args)
-	if fs.NArg() == 0 {
+	if len(args) == 0 {
 		return errors.New("укажите имя провайдера: models set-key NAME --key K")
 	}
-	name := fs.Arg(0)
+	name := args[0]
+	fs := flag.NewFlagSet("models set-key", flag.ExitOnError)
+	key := fs.String("key", "", "API-ключ (или $ENV)")
+	_ = fs.Parse(args[1:]) // позиционный NAME — первым, флаги — после
 	if strings.HasPrefix(*key, "$") {
 		*key = os.Getenv(strings.TrimPrefix(*key, "$"))
 	}
@@ -409,6 +434,107 @@ func (c *cli) modelsSetKey(args []string) error {
 	}
 	body, _ := json.Marshal(map[string]string{"api_key": *key})
 	return c.postNoBody("/api/models/"+id+"/api-key", body)
+}
+
+// ─── keys (персональные ключи провайдеров, L) ──────────────────────────────
+
+func (c *cli) cmdKeys(args []string) error {
+	if len(args) == 0 {
+		return errors.New(
+			"usage: rubezh keys list | add PROVIDER --key K | rm PROVIDER")
+	}
+	switch args[0] {
+	case "list":
+		return c.keysList()
+	case "add":
+		return c.keysAdd(args[1:])
+	case "rm":
+		return c.keysRemove(args[1:])
+	default:
+		return fmt.Errorf("неизвестная подкоманда: %s", args[0])
+	}
+}
+
+type myCred struct {
+	ID           string `json:"id"`
+	ProviderID   string `json:"provider_id"`
+	ProviderName string `json:"provider_name"`
+	IsEnabled    bool   `json:"is_enabled"`
+	HasKey       bool   `json:"has_key"`
+}
+
+func (c *cli) keysList() error {
+	var creds []myCred
+	if err := c.getJSON("/api/me/credentials", &creds); err != nil {
+		return err
+	}
+	if len(creds) == 0 {
+		fmt.Println("персональных ключей нет")
+		return nil
+	}
+	fmt.Printf("%-22s %-7s %s\n", "PROVIDER", "ENABLED", "KEY")
+	for _, c := range creds {
+		on := "no"
+		if c.IsEnabled {
+			on = "yes"
+		}
+		key := "—"
+		if c.HasKey {
+			key = "✓"
+		}
+		fmt.Printf("%-22s %-7s %s\n", c.ProviderName, on, key)
+	}
+	return nil
+}
+
+func (c *cli) keysAdd(args []string) error {
+	if len(args) == 0 {
+		return errors.New("укажите провайдера: keys add PROVIDER --key K")
+	}
+	provider := args[0]
+	fs := flag.NewFlagSet("keys add", flag.ExitOnError)
+	key := fs.String("key", "", "API-ключ (или $ENV)")
+	_ = fs.Parse(args[1:]) // позиционный PROVIDER — первым, флаги — после
+	if strings.HasPrefix(*key, "$") {
+		*key = os.Getenv(strings.TrimPrefix(*key, "$"))
+	}
+	if *key == "" {
+		return errors.New("--key обязателен")
+	}
+	id, err := c.providerID(provider)
+	if err != nil {
+		return err
+	}
+	body, _ := json.Marshal(map[string]string{"provider_id": id, "api_key": *key})
+	if err := c.postNoBody("/api/me/credentials", body); err != nil {
+		return err
+	}
+	fmt.Printf("✓ персональный ключ подключён к %s\n", provider)
+	return nil
+}
+
+func (c *cli) keysRemove(args []string) error {
+	if len(args) == 0 {
+		return errors.New("укажите провайдера: keys rm PROVIDER")
+	}
+	pid, err := c.providerID(args[0])
+	if err != nil {
+		return err
+	}
+	var creds []myCred
+	if err := c.getJSON("/api/me/credentials", &creds); err != nil {
+		return err
+	}
+	for _, cr := range creds {
+		if cr.ProviderID == pid {
+			if err := c.sendJSON("DELETE", "/api/me/credentials/"+cr.ID, nil); err != nil {
+				return err
+			}
+			fmt.Printf("✓ персональный ключ для %s отключён\n", args[0])
+			return nil
+		}
+	}
+	return fmt.Errorf("персональный ключ для %q не найден", args[0])
 }
 
 // ─── docs ────────────────────────────────────────────────────────────────
@@ -569,6 +695,46 @@ func (c *cli) postNoBody(path string, body []byte) error {
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, bodyText(resp))
 	}
 	return nil
+}
+
+// sendJSON выполняет запрос с произвольным методом (PATCH/DELETE/POST).
+// body может быть nil. Возвращает ошибку при не-2xx.
+func (c *cli) sendJSON(method, path string, body []byte) error {
+	var rdr io.Reader
+	if body != nil {
+		rdr = bytes.NewReader(body)
+	}
+	req, _ := http.NewRequest(method, c.api+path, rdr)
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, bodyText(resp))
+	}
+	return nil
+}
+
+// providerID резолвит id провайдера по имени.
+func (c *cli) providerID(name string) (string, error) {
+	var ml []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if err := c.getJSON("/api/models", &ml); err != nil {
+		return "", err
+	}
+	for _, p := range ml {
+		if p.Name == name {
+			return p.ID, nil
+		}
+	}
+	return "", fmt.Errorf("провайдер %q не найден", name)
 }
 
 func bodyText(resp *http.Response) string {
