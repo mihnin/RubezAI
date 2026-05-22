@@ -252,6 +252,29 @@
 - **Тесты:** e2e smoke (главный MVP-сценарий).
 - **Закрывает критерии:** 1, 12, 14, 15 (финальная проверка всех 15).
 
+### ~~Итерация H.3 — LLM-обезличивание (фильтр 2/3) + усиление фильтра 1~~ ✅ Реализовано
+
+- **Цель:** подключить локальную русскоязычную LLM (LM Studio / DeepSeek-7B)
+  как фильтр 2/3 через интерфейс `Detector`; закрыть пропуски на
+  `testdata/fake_contract.docx` (паспорт `4501 № 234567`, банковская карта,
+  ИНН физлица, СНИЛС, пароль во фразе).
+- **Фильтр 1 (rules-first):** `bank_card_luhn` (16 цифр + Луна) и
+  `bank_card_grouped` (формат 4-4-4-4); паспорт со знаком `№`; `inn_labeled` /
+  `snils_labeled` — детекция по контекстной метке даже при невалидной
+  контрольной сумме; `password` допускает уточняющие слова перед разделителем.
+  `EntityType.BANK_CARD` + префикс `КАРТА` + синхронизация контракта.
+- **Фильтр 2/3 (LLM-assisted):** `app/llm_review/` — `LLMReviewClient`
+  (Protocol + `MockLLMReviewClient`-fallback), `OpenAILLMReviewClient`
+  (OpenAI-совместимый, `response_format=json_schema`, fail-open, robust-парсинг
+  reasoning-моделей), `LLMReviewDetector` (адаптер к `Detector`). Env
+  `SANITIZER_LLM_URL/MODEL/KEY/TIMEOUT` (опциональны). Проводка через lifespan +
+  DI в `/sanitize/preview`. LLM **не принимает** решений allow/deny.
+- **Проверено вживую:** `docker compose` + реальная DeepSeek-7B
+  (LM Studio `172.27.48.1:1234`, из контейнера `host.docker.internal`).
+  Договор обезличивается **полностью детерминированно** (LLM — бэкап).
+- **Тесты:** +33 (детекторы карт/паспорта/контекстных ИНН-СНИЛС, модуль
+  LLM-review, парсер ответов, fail-open). Всего 178 в санитайзере, ruff/mypy чисты.
+
 ---
 
 ## Технический долг
