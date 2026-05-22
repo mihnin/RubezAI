@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from app.detectors.registry import scan
 from app.domain.entities import Category, EntityType, Match
 
@@ -39,6 +41,29 @@ def test_detect_password_assignment_value_only() -> None:
     found = next(m for m in matches if m.type == EntityType.SECRET_PASSWORD)
     # значение матча — только сам секрет, без ключевого слова
     assert found.value == "Sup3rSecret!"
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("код CVC: 412", "412"),
+        ("CVV 123", "123"),
+        ("CVC2: 4567", "4567"),
+        ("cvv2 — 999", "999"),
+    ],
+)
+def test_detect_card_cvc(text: str, expected: str) -> None:
+    matches = scan(text)
+    cvc = next((m for m in matches if m.type == EntityType.SECRET_CARD_CVC), None)
+    assert cvc is not None
+    assert cvc.value == expected
+    assert cvc.category is Category.SECRET
+
+
+@pytest.mark.parametrize("text", ["CVC карты не указан", "номер 412 в очереди"])
+def test_cvc_not_detected_without_keyword_and_number(text: str) -> None:
+    # без связки «ключевое слово + 3–4 цифры» CVC не детектируется (точность)
+    assert EntityType.SECRET_CARD_CVC not in {m.type for m in scan(text)}
 
 
 def test_detect_dsn_with_credentials() -> None:

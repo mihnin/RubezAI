@@ -26,6 +26,10 @@ _OAUTH = r"\bgh[pousr]_[A-Za-z0-9]{36}\b|\bya29\.[0-9A-Za-z_\-]{20,}\b"
 # key=value-конструкций.
 _PASSWORD = r"(?i)(?:password|passwd|pwd|пароль)[^\n:=]{0,30}[:=]\s*([^\s;'\"]{6,})"
 
+# CVC/CVV банковской карты: 3–4 цифры после ключевого слова. group 1 — только
+# число (без слова). Keyword-anchored — «голые» 3 цифры не ловятся (точность).
+_CARD_CVC = r"(?i)\b(?:CVC2?|CVV2?|CVP2)\b\s*[:\-—]?\s*(\d{3,4})\b"
+
 # DSN: URI со встроенными учётными данными — scheme://user:pass@host.
 _DSN = r"\b[a-zA-Z][a-zA-Z0-9+.\-]*://[^\s:/@]+:[^\s:/@]+@[^\s/]+"
 
@@ -52,6 +56,8 @@ def secret_detectors() -> list[RegexDetector]:
                       category=secret, pattern=_OAUTH),
         RegexDetector(name="password", entity_type=EntityType.SECRET_PASSWORD,
                       category=secret, pattern=_PASSWORD, group=1),
+        RegexDetector(name="card_cvc", entity_type=EntityType.SECRET_CARD_CVC,
+                      category=secret, pattern=_CARD_CVC, group=1),
         RegexDetector(name="dsn", entity_type=EntityType.SECRET_DSN,
                       category=secret, pattern=_DSN),
         RegexDetector(name="conn_string", entity_type=EntityType.SECRET_CONN_STRING,

@@ -28,6 +28,7 @@ _PREFIX: dict[EntityType, str] = {
     EntityType.SECRET_PASSWORD: "СЕКРЕТ",
     EntityType.SECRET_DSN: "СЕКРЕТ",
     EntityType.SECRET_CONN_STRING: "СЕКРЕТ",
+    EntityType.SECRET_CARD_CVC: "CVC",
     EntityType.COMMERCIAL_AMOUNT: "СУММА",
     EntityType.COMMERCIAL_CONTRACT: "ДОГОВОР",
     EntityType.COMMERCIAL_SUPPLIER: "КОНТРАГЕНТ",
