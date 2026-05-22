@@ -21,7 +21,11 @@
           "description": "Текст запроса пользователя. Верхняя граница обязательна: ограничивает объём, уходящий в sanitizer и LLM"
         },
         "provider": { "type": "string", "minLength": 1 },
-        "model": { "type": "string" }
+        "model": { "type": "string" },
+        "preview_token": {
+          "type": ["string", "null"],
+          "description": "Одноразовый токен из POST /api/chat/preview (J.0): бэкенд переиспользует тот sanitize — гарантия, что отправлен ровно подтверждённый обезличенный текст"
+        }
       }
     },
     "ChatSessionRequest": {

@@ -15,6 +15,7 @@ import (
 	"github.com/rubezh-ai/rubezh-api/internal/auth"
 	"github.com/rubezh-ai/rubezh-api/internal/chat"
 	"github.com/rubezh-ai/rubezh-api/internal/llm"
+	"github.com/rubezh-ai/rubezh-api/internal/sanitizer"
 	"github.com/rubezh-ai/rubezh-api/internal/storage"
 )
 
@@ -31,6 +32,11 @@ type chatOrchestrator interface {
 		prepared chat.Prepared, sink chat.EventSink) error
 }
 
+// previewOrchestrator — зависимость POST /api/chat/preview (J.1).
+type previewOrchestrator interface {
+	Preview(ctx context.Context, req chat.Request) (sanitizer.PreviewResponse, string, error)
+}
+
 // --- DTO HTTP-слоя, согласованные с docs/contracts/chat.schema.json ---
 
 type chatRequestDTO struct {
@@ -38,6 +44,34 @@ type chatRequestDTO struct {
 	Message   string  `json:"message"`
 	Provider  string  `json:"provider"`
 	Model     string  `json:"model"`
+	// PreviewToken — токен из POST /api/chat/preview (J.0); если задан,
+	// бэкенд переиспользует тот sanitize (гарантия идентичности текста).
+	PreviewToken *string `json:"preview_token"`
+}
+
+// chatPreviewRequestDTO — тело POST /api/chat/preview (J.1).
+type chatPreviewRequestDTO struct {
+	Text     string `json:"text"`
+	Provider string `json:"provider"`
+}
+
+// chatPreviewEntityDTO — сущность в предпросмотре: whitelist без позиций и
+// raw_hash (для гейта достаточно типа/класса; raw наружу не уходит).
+type chatPreviewEntityDTO struct {
+	Type       string  `json:"type"`
+	Category   string  `json:"category"`
+	Pseudonym  string  `json:"pseudonym"`
+	Confidence float64 `json:"confidence"`
+	Detector   string  `json:"detector"`
+}
+
+// chatPreviewResponseDTO — ответ предпросмотра: токен + обезличенный текст +
+// сущности (для статистики) + риск. LLM не вызывался, Tx1 не писался.
+type chatPreviewResponseDTO struct {
+	PreviewToken  string                 `json:"preview_token"`
+	SanitizedText string                 `json:"sanitized_text"`
+	Entities      []chatPreviewEntityDTO `json:"entities"`
+	Risk          sseRiskPayload         `json:"risk"`
 }
 
 type chatSessionRequestDTO struct {
@@ -293,6 +327,93 @@ func chatHandler(
 	}
 }
 
+// previewChatHandler — POST /api/chat/preview (J.1): обезличивает текст
+// (фильтр 1+2) без вызова LLM и без Tx1, кэширует результат и возвращает
+// preview_token + обезличенный текст + сущности + риск. Гейт перед отправкой
+// в облако строится на этом «сухом прогоне».
+func previewChatHandler(
+	orch previewOrchestrator, store *storage.Storage,
+	llmRouter *llm.Router, logger *slog.Logger,
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		role, _ := auth.RoleFromContext(r.Context())
+		userID, err := store.UserIDForRole(r.Context(), string(role))
+		if err != nil {
+			http.Error(w, "не удалось определить пользователя",
+				http.StatusInternalServerError)
+			return
+		}
+		var dto chatPreviewRequestDTO
+		if err := decodeJSON(w, r, &dto); err != nil {
+			http.Error(w, "некорректный JSON", http.StatusBadRequest)
+			return
+		}
+		if dto.Text == "" {
+			http.Error(w, "поле text обязательно", http.StatusBadRequest)
+			return
+		}
+		if utf8.RuneCountInString(dto.Text) > _maxChatMessageRunes {
+			http.Error(w, "text слишком длинный", http.StatusBadRequest)
+			return
+		}
+		if dto.Provider == "" {
+			http.Error(w, "поле provider обязательно", http.StatusBadRequest)
+			return
+		}
+		provider, cerr := resolveProvider(r.Context(), store, llmRouter, dto.Provider)
+		if cerr != nil {
+			http.Error(w, cerr.message, cerr.code)
+			return
+		}
+		// Сессия нужна для привязки кэша; создаём, если не передана.
+		session, cerr := resolveSession(r.Context(), store, userID, nil)
+		if cerr != nil {
+			http.Error(w, cerr.message, cerr.code)
+			return
+		}
+		req := chat.Request{
+			RequestID: newRequestID(), SessionID: session.ID, UserID: userID,
+			UserRole: string(role), Message: dto.Text,
+			Provider: provider.Name, ProviderID: provider.ID,
+			ModelTrust: provider.TrustLevel,
+		}
+		preview, token, err := orch.Preview(r.Context(), req)
+		if err != nil {
+			logger.Warn("предпросмотр чата не удался",
+				"error", err, "request_id", req.RequestID)
+			http.Error(w, "ошибка обезличивания", http.StatusBadGateway)
+			return
+		}
+		writeJSON(w, http.StatusOK, chatPreviewResponseDTO{
+			PreviewToken:  token,
+			SanitizedText: preview.SanitizedText,
+			Entities:      previewEntitiesToDTO(preview.Entities),
+			Risk: sseRiskPayload{
+				Level: preview.Risk.Level, Score: preview.Risk.Score,
+				Classes: nonNilStrings(preview.Risk.Classes),
+			},
+		})
+	}
+}
+
+func previewEntitiesToDTO(entities []sanitizer.Entity) []chatPreviewEntityDTO {
+	out := make([]chatPreviewEntityDTO, len(entities))
+	for i, e := range entities {
+		out[i] = chatPreviewEntityDTO{
+			Type: e.Type, Category: e.Category, Pseudonym: e.Pseudonym,
+			Confidence: e.Confidence, Detector: e.Detector,
+		}
+	}
+	return out
+}
+
+func nonNilStrings(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
 // chatError — ошибка этапа подготовки чата с HTTP-статусом.
 type chatError struct {
 	code    int
@@ -376,16 +497,21 @@ func buildChatRequest(
 	role auth.Role, userID string, dto chatRequestDTO,
 	provider storage.ModelProvider, session storage.ChatSession,
 ) chat.Request {
+	token := ""
+	if dto.PreviewToken != nil {
+		token = *dto.PreviewToken
+	}
 	return chat.Request{
-		RequestID:  newRequestID(),
-		SessionID:  session.ID,
-		UserID:     userID,
-		UserRole:   string(role),
-		Message:    dto.Message,
-		Provider:   provider.Name,
-		ProviderID: provider.ID,
-		ModelTrust: provider.TrustLevel,
-		Model:      modelOrDefault(dto.Model, provider.Name),
+		RequestID:    newRequestID(),
+		SessionID:    session.ID,
+		UserID:       userID,
+		UserRole:     string(role),
+		Message:      dto.Message,
+		Provider:     provider.Name,
+		ProviderID:   provider.ID,
+		ModelTrust:   provider.TrustLevel,
+		Model:        modelOrDefault(dto.Model, provider.Name),
+		PreviewToken: token,
 	}
 }
 

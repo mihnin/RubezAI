@@ -32,11 +32,12 @@ type Prepared struct {
 // asyncWG отслеживает фоновые задачи (auto-incident после sink.Done) —
 // см. Wait() для graceful shutdown и тестов.
 type Orchestrator struct {
-	sanitizer SanitizerClient
-	llm       LLMRouter
-	store     Store
-	cipher    *crypto.Cipher // nil — Tx1 mappings не записываются (тесты)
-	asyncWG   sync.WaitGroup
+	sanitizer    SanitizerClient
+	llm          LLMRouter
+	store        Store
+	cipher       *crypto.Cipher // nil — Tx1 mappings не записываются (тесты)
+	previewCache *PreviewCache  // кэш sanitize для гейта предпросмотра (J.0)
+	asyncWG      sync.WaitGroup
 }
 
 // NewOrchestrator создаёт оркестратор с зависимостями.
@@ -46,7 +47,52 @@ type Orchestrator struct {
 func NewOrchestrator(
 	s SanitizerClient, l LLMRouter, st Store, cipher *crypto.Cipher,
 ) *Orchestrator {
-	return &Orchestrator{sanitizer: s, llm: l, store: st, cipher: cipher}
+	return &Orchestrator{
+		sanitizer: s, llm: l, store: st, cipher: cipher,
+		previewCache: NewPreviewCache(_previewTTL),
+	}
+}
+
+// Preview выполняет ЕДИНСТВЕННЫЙ sanitize (фильтр 1+2) и кэширует результат
+// под одноразовым preview_token. LLM не вызывается, Tx1 не пишется — это
+// «сухой прогон» для гейта подтверждения перед отправкой в облако (J.1).
+// Возвращённый токен затем передаётся в /api/chat, чтобы отправить ровно тот
+// обезличенный текст, который пользователь видел и подтвердил (J.0).
+func (o *Orchestrator) Preview(
+	ctx context.Context, req Request,
+) (sanitizer.PreviewResponse, string, error) {
+	preview, err := o.sanitizer.Preview(ctx, sanitizer.PreviewRequest{
+		Text: req.Message, Context: "chat",
+	})
+	if err != nil {
+		return sanitizer.PreviewResponse{}, "",
+			fmt.Errorf("chat: предпросмотр обезличивания: %w", err)
+	}
+	pmap, err := BuildPseudonymMap(req.Message, preview.Entities)
+	if err != nil {
+		return sanitizer.PreviewResponse{}, "",
+			fmt.Errorf("chat: карта псевдонимов: %w", err)
+	}
+	if o.previewCache == nil {
+		return sanitizer.PreviewResponse{}, "",
+			fmt.Errorf("chat: preview-кэш не инициализирован")
+	}
+	token, err := o.previewCache.put(
+		previewResult{preview: preview, pmap: pmap}, req.UserID, req.SessionID)
+	if err != nil {
+		return sanitizer.PreviewResponse{}, "", err
+	}
+	return preview, token, nil
+}
+
+// consumePreview достаёт закэшированный результат по preview_token (J.0).
+// Возвращает ok=false, если токен пуст/не найден/чужой/просрочен — тогда
+// Prepare выполняет свежий sanitize (текст тот же, фильтр 1 детерминирован).
+func (o *Orchestrator) consumePreview(req Request) (previewResult, bool) {
+	if req.PreviewToken == "" || o.previewCache == nil {
+		return previewResult{}, false
+	}
+	return o.previewCache.consume(req.PreviewToken, req.UserID)
 }
 
 // classifyLLMError возвращает короткое user-facing сообщение по причине
@@ -105,20 +151,12 @@ func (o *Orchestrator) goAsync(fn func()) {
 func (o *Orchestrator) Prepare(
 	ctx context.Context, req Request,
 ) (Prepared, error) {
-	preview, err := o.sanitizer.Preview(ctx, sanitizer.PreviewRequest{
-		Text: req.Message, Context: "chat",
-	})
+	// J.0: при наличии валидного preview_token переиспользуем результат
+	// единственного sanitize (гарантия «подтверждён ровно тот текст, что
+	// уйдёт»). Иначе — свежий sanitize (промах кэша/без гейта).
+	preview, pmap, err := o.resolveSanitize(ctx, req)
 	if err != nil {
-		o.recordAuditEvent(ctx, o.errorEvent(req,
-			map[string]any{"stage": "sanitize"}))
-		return Prepared{}, fmt.Errorf("chat: обезличивание: %w", err)
-	}
-
-	pmap, pmapErr := BuildPseudonymMap(req.Message, preview.Entities)
-	if pmapErr != nil {
-		o.recordAuditEvent(ctx, o.sanitizedErrorEvent(req, preview,
-			map[string]any{"stage": "pseudonym_map", "error": pmapErr.Error()}))
-		return Prepared{}, fmt.Errorf("chat: карта псевдонимов: %w", pmapErr)
+		return Prepared{}, err
 	}
 
 	outcome := policy.DefaultPolicy().Decide(
@@ -143,6 +181,33 @@ func (o *Orchestrator) Prepare(
 		return Prepared{}, fmt.Errorf("chat: запись запроса: %w", err)
 	}
 	return Prepared{preview: preview, outcome: outcome, pmap: pmap}, nil
+}
+
+// resolveSanitize возвращает (preview, pmap): из кэша по preview_token (J.0)
+// или свежим sanitize при промахе. Аудит ошибок свежего пути сохранён.
+func (o *Orchestrator) resolveSanitize(
+	ctx context.Context, req Request,
+) (sanitizer.PreviewResponse, PseudonymMap, error) {
+	if cached, ok := o.consumePreview(req); ok {
+		return cached.preview, cached.pmap, nil
+	}
+	preview, err := o.sanitizer.Preview(ctx, sanitizer.PreviewRequest{
+		Text: req.Message, Context: "chat",
+	})
+	if err != nil {
+		o.recordAuditEvent(ctx, o.errorEvent(req,
+			map[string]any{"stage": "sanitize"}))
+		return sanitizer.PreviewResponse{}, PseudonymMap{},
+			fmt.Errorf("chat: обезличивание: %w", err)
+	}
+	pmap, pmapErr := BuildPseudonymMap(req.Message, preview.Entities)
+	if pmapErr != nil {
+		o.recordAuditEvent(ctx, o.sanitizedErrorEvent(req, preview,
+			map[string]any{"stage": "pseudonym_map", "error": pmapErr.Error()}))
+		return sanitizer.PreviewResponse{}, PseudonymMap{},
+			fmt.Errorf("chat: карта псевдонимов: %w", pmapErr)
+	}
+	return preview, pmap, nil
 }
 
 // buildEncryptedMappings собирает []storage.PseudonymMappingInput

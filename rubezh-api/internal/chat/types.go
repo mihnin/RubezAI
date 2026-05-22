@@ -53,6 +53,9 @@ type Request struct {
 	ProviderID string // id записи model_providers (для аудита и БД)
 	ModelTrust string // trust_level провайдера
 	Model      string // имя модели для запроса к LLM
+	// PreviewToken — одноразовый токен закэшированного предпросмотра (J.0).
+	// Если задан и валиден — Prepare переиспользует тот sanitize вместо нового.
+	PreviewToken string
 }
 
 // RiskView — оценка риска для SSE-события meta.
