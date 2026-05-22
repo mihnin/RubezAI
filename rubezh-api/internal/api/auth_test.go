@@ -49,12 +49,15 @@ func TestDevLoginIssuesParseableToken(t *testing.T) {
 	if resp.ExpiresAt == "" {
 		t.Error("expires_at не должно быть пустым")
 	}
-	role, err := auth.ParseToken(resp.Token, "test-secret")
+	id, err := auth.ParseToken(resp.Token, "test-secret")
 	if err != nil {
 		t.Fatalf("ParseToken: %v", err)
 	}
-	if role != auth.RoleUser {
-		t.Errorf("role = %s, ожидалось user", role)
+	if id.Role != auth.RoleUser {
+		t.Errorf("role = %s, ожидалось user", id.Role)
+	}
+	if id.UserID == "" {
+		t.Error("токен dev-login должен нести user_id (K.0)")
 	}
 	if store.asked != "user" {
 		t.Errorf("store asked = %q", store.asked)

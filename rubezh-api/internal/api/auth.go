@@ -57,7 +57,7 @@ func devLoginHandler(store devLoginStore, secret string) http.HandlerFunc {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		token := auth.IssueToken(role, secret)
+		token := auth.IssueTokenForUser(userID, role, secret)
 		resp := devLoginResponse{
 			Token:     token,
 			Role:      string(role),

@@ -44,25 +44,47 @@ var ErrInvalidToken = errors.New("auth: невалидный токен")
 
 type ctxKey struct{}
 
-// IssueToken выпускает dev-токен с ролью. Формат: "<role>.<hex(hmac-sha256)>".
+// Identity — аутентифицированный субъект: конкретный пользователь и его роль.
+// До OIDC (K.0) user_id берётся из dev-login (по роли); после OIDC — реальный
+// id пользователя из upsert по email. Несётся в подписанном токене.
+type Identity struct {
+	UserID string
+	Role   Role
+}
+
+// IssueToken выпускает токен только с ролью (legacy/dev). Формат:
+// "<role>.<hmac>". user_id при разборе пуст — вызывающий резолвит по роли.
 func IssueToken(role Role, secret string) string {
 	return string(role) + "." + sign(string(role), secret)
 }
 
-// ParseToken проверяет подпись токена и возвращает роль.
-func ParseToken(token, secret string) (Role, error) {
+// IssueTokenForUser выпускает токен с конкретным user_id и ролью (K.0: OIDC и
+// dev-login). Формат: "<user_id>:<role>.<hmac>".
+func IssueTokenForUser(userID string, role Role, secret string) string {
+	payload := userID + ":" + string(role)
+	return payload + "." + sign(payload, secret)
+}
+
+// ParseToken проверяет подпись и возвращает Identity. Понимает оба формата:
+// "<role>" (user_id пуст) и "<user_id>:<role>".
+func ParseToken(token, secret string) (Identity, error) {
 	payload, signature, found := strings.Cut(token, ".")
 	if !found {
-		return "", ErrInvalidToken
+		return Identity{}, ErrInvalidToken
 	}
-	role := Role(payload)
+	userID, roleStr, hasUser := strings.Cut(payload, ":")
+	if !hasUser {
+		roleStr = userID // формат "<role>" — без user_id
+		userID = ""
+	}
+	role := Role(roleStr)
 	if !validRoles[role] {
-		return "", ErrInvalidToken
+		return Identity{}, ErrInvalidToken
 	}
 	if !hmac.Equal([]byte(signature), []byte(sign(payload, secret))) {
-		return "", ErrInvalidToken
+		return Identity{}, ErrInvalidToken
 	}
-	return role, nil
+	return Identity{UserID: userID, Role: role}, nil
 }
 
 const bearerPrefix = "Bearer "
@@ -77,21 +99,27 @@ func Middleware(secret string) func(http.Handler) http.Handler {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
-			role, err := ParseToken(strings.TrimPrefix(header, bearerPrefix), secret)
+			identity, err := ParseToken(strings.TrimPrefix(header, bearerPrefix), secret)
 			if err != nil {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
-			ctx := context.WithValue(r.Context(), ctxKey{}, role)
+			ctx := context.WithValue(r.Context(), ctxKey{}, identity)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
 
-// RoleFromContext возвращает роль, помещённую в контекст middleware.
+// IdentityFromContext возвращает аутентифицированного субъекта из контекста.
+func IdentityFromContext(ctx context.Context) (Identity, bool) {
+	id, ok := ctx.Value(ctxKey{}).(Identity)
+	return id, ok
+}
+
+// RoleFromContext возвращает роль субъекта (обратная совместимость).
 func RoleFromContext(ctx context.Context) (Role, bool) {
-	role, ok := ctx.Value(ctxKey{}).(Role)
-	return role, ok
+	id, ok := ctx.Value(ctxKey{}).(Identity)
+	return id.Role, ok
 }
 
 func sign(payload, secret string) string {

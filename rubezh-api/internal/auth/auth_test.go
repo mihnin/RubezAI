@@ -35,14 +35,35 @@ func flipLast(s string) string {
 	return s[:len(s)-1] + string(repl)
 }
 
+func TestIssueTokenForUserCarriesUserID(t *testing.T) {
+	id, err := ParseToken(
+		IssueTokenForUser("u-123", RoleAdmin, testSecret), testSecret)
+	if err != nil {
+		t.Fatalf("ParseToken: %v", err)
+	}
+	if id.UserID != "u-123" || id.Role != RoleAdmin {
+		t.Errorf("получено %+v, ожидалось {u-123 admin}", id)
+	}
+}
+
+func TestParseTokenRoleOnlyHasEmptyUserID(t *testing.T) {
+	id, err := ParseToken(IssueToken(RoleUser, testSecret), testSecret)
+	if err != nil {
+		t.Fatalf("ParseToken: %v", err)
+	}
+	if id.UserID != "" || id.Role != RoleUser {
+		t.Errorf("legacy-токен: получено %+v, ожидалось пустой user_id + user", id)
+	}
+}
+
 func TestIssueParseRoundTripAllRoles(t *testing.T) {
 	for _, role := range allRoles() {
 		got, err := ParseToken(IssueToken(role, testSecret), testSecret)
 		if err != nil {
 			t.Errorf("роль %q: ParseToken: %v", role, err)
 		}
-		if got != role {
-			t.Errorf("роль %q: получено %q", role, got)
+		if got.Role != role {
+			t.Errorf("роль %q: получено %q", role, got.Role)
 		}
 	}
 }

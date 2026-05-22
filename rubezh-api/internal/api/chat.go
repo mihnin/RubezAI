@@ -276,7 +276,7 @@ func chatHandler(
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		role, _ := auth.RoleFromContext(r.Context())
-		userID, err := store.UserIDForRole(r.Context(), string(role))
+		userID, err := currentUserID(r, store)
 		if err != nil {
 			http.Error(w, "не удалось определить пользователя",
 				http.StatusInternalServerError)
@@ -346,7 +346,7 @@ func previewChatHandler(
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		role, _ := auth.RoleFromContext(r.Context())
-		userID, err := store.UserIDForRole(r.Context(), string(role))
+		userID, err := currentUserID(r, store)
 		if err != nil {
 			http.Error(w, "не удалось определить пользователя",
 				http.StatusInternalServerError)
@@ -490,10 +490,18 @@ type chatError struct {
 	message string
 }
 
-// currentUserID резолвит id пользователя по роли из контекста auth.
+// currentUserID возвращает id аутентифицированного пользователя.
+// K.0: если токен несёт реальный user_id (dev-login/OIDC) — берём его; иначе
+// (legacy role-only токен) резолвим по роли через UserIDForRole.
 func currentUserID(r *http.Request, store *storage.Storage) (string, error) {
-	role, _ := auth.RoleFromContext(r.Context())
-	return store.UserIDForRole(r.Context(), string(role))
+	id, ok := auth.IdentityFromContext(r.Context())
+	if !ok {
+		return "", errors.New("api: нет идентичности в контексте")
+	}
+	if id.UserID != "" {
+		return id.UserID, nil
+	}
+	return store.UserIDForRole(r.Context(), string(id.Role))
 }
 
 // resolveProvider проверяет провайдера: запись model_providers (enabled)
