@@ -54,6 +54,12 @@ type createModelRequest struct {
 	APIKey          *string `json:"api_key"`
 }
 
+// patchModelRequest — PATCH /api/models/:id. Поле-указатель отличает
+// «не передано» от false; сейчас поддерживается только toggle is_enabled.
+type patchModelRequest struct {
+	IsEnabled *bool `json:"is_enabled"`
+}
+
 // patchAPIKeyRequest — POST /api/models/:id/api-key. Plaintext шифруется
 // с AAD = id того же провайдера (UUID, иммутабельный). Пустая строка
 // сбрасывает ключ (NULL) — provider будет использовать env LLM_API_KEY
@@ -226,6 +232,89 @@ func tryReloadRouter(
 	if err := reload(ctx); err != nil && logger != nil {
 		logger.Error("hot-reload LLM Router не удался",
 			"op", op, "error", err)
+	}
+}
+
+// patchModelHandler — PATCH /api/models/:id. Сейчас: toggle is_enabled
+// (soft-disable). RBAC — admin/developer. После изменения — hot-reload Router
+// (выключенный провайдер исчезает из chat-picker'а без рестарта api).
+func patchModelHandler(
+	store *storage.Storage,
+	reloadRouter func(context.Context) error, logger *slog.Logger,
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		role, _ := auth.RoleFromContext(r.Context())
+		if !modelWriteRoles[role] {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		id := chi.URLParam(r, "id")
+		if !isUUID(id) {
+			http.NotFound(w, r)
+			return
+		}
+		var req patchModelRequest
+		if err := decodeJSON(w, r, &req); err != nil {
+			http.Error(w, "некорректный JSON", http.StatusBadRequest)
+			return
+		}
+		if req.IsEnabled == nil {
+			http.Error(w, "нет поддерживаемых полей для изменения (ожидается is_enabled)",
+				http.StatusBadRequest)
+			return
+		}
+		updated, err := store.SetModelProviderEnabled(r.Context(), id, *req.IsEnabled)
+		if err != nil {
+			if errors.Is(err, storage.ErrModelProviderNotFound) {
+				http.NotFound(w, r)
+				return
+			}
+			http.Error(w, "не удалось обновить провайдера",
+				http.StatusInternalServerError)
+			return
+		}
+		tryReloadRouter(r.Context(), reloadRouter, logger, "patchModel")
+		writeJSON(w, http.StatusOK, modelProviderToDTO(updated))
+	}
+}
+
+// deleteModelHandler — DELETE /api/models/:id. RBAC — admin/developer.
+// Если на провайдера ссылается история (chat_messages / audit_events) — 409 с
+// предложением soft-disable вместо удаления (append-only-история не рушится).
+func deleteModelHandler(
+	store *storage.Storage,
+	reloadRouter func(context.Context) error, logger *slog.Logger,
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		role, _ := auth.RoleFromContext(r.Context())
+		if !modelWriteRoles[role] {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		id := chi.URLParam(r, "id")
+		if !isUUID(id) {
+			http.NotFound(w, r)
+			return
+		}
+		err := store.DeleteModelProvider(r.Context(), id)
+		switch {
+		case errors.Is(err, storage.ErrModelProviderNotFound):
+			http.NotFound(w, r)
+			return
+		case errors.Is(err, storage.ErrModelProviderReferenced):
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"error": "провайдер используется в истории; выключите его " +
+					"(is_enabled=false) вместо удаления",
+				"suggestion": "disable",
+			})
+			return
+		case err != nil:
+			http.Error(w, "не удалось удалить провайдера",
+				http.StatusInternalServerError)
+			return
+		}
+		tryReloadRouter(r.Context(), reloadRouter, logger, "deleteModel")
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 

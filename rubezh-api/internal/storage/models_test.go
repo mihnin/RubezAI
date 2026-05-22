@@ -65,6 +65,75 @@ func TestCreateModelProviderRejectsDuplicateName(t *testing.T) {
 	}
 }
 
+func TestSetModelProviderEnabledToggles(t *testing.T) {
+	store := testStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	name := "toggle-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	created, err := store.CreateModelProvider(ctx, ModelProvider{
+		Name: name, TrustLevel: "external", Adapter: "mock",
+	})
+	if err != nil {
+		t.Fatalf("CreateModelProvider: %v", err)
+	}
+	disabled, err := store.SetModelProviderEnabled(ctx, created.ID, false)
+	if err != nil {
+		t.Fatalf("SetModelProviderEnabled(false): %v", err)
+	}
+	if disabled.IsEnabled {
+		t.Error("is_enabled должен стать false")
+	}
+	enabled, err := store.SetModelProviderEnabled(ctx, created.ID, true)
+	if err != nil {
+		t.Fatalf("SetModelProviderEnabled(true): %v", err)
+	}
+	if !enabled.IsEnabled {
+		t.Error("is_enabled должен стать true")
+	}
+}
+
+func TestSetModelProviderEnabledNotFound(t *testing.T) {
+	store := testStore(t)
+	defer store.Close()
+	_, err := store.SetModelProviderEnabled(
+		context.Background(), "00000000-0000-0000-0000-000000000000", false)
+	if !errors.Is(err, ErrModelProviderNotFound) {
+		t.Errorf("ожидалась ErrModelProviderNotFound, получено %v", err)
+	}
+}
+
+func TestDeleteModelProviderUnreferenced(t *testing.T) {
+	store := testStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	name := "del-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	created, err := store.CreateModelProvider(ctx, ModelProvider{
+		Name: name, TrustLevel: "external", Adapter: "mock",
+	})
+	if err != nil {
+		t.Fatalf("CreateModelProvider: %v", err)
+	}
+	if err := store.DeleteModelProvider(ctx, created.ID); err != nil {
+		t.Fatalf("DeleteModelProvider: %v", err)
+	}
+	if _, err := store.GetModelProvider(ctx, created.ID); !errors.Is(
+		err, ErrModelProviderNotFound) {
+		t.Errorf("после удаления ожидалась ErrModelProviderNotFound, получено %v", err)
+	}
+}
+
+func TestDeleteModelProviderNotFound(t *testing.T) {
+	store := testStore(t)
+	defer store.Close()
+	err := store.DeleteModelProvider(
+		context.Background(), "00000000-0000-0000-0000-000000000000")
+	if !errors.Is(err, ErrModelProviderNotFound) {
+		t.Errorf("ожидалась ErrModelProviderNotFound, получено %v", err)
+	}
+}
+
 func TestCreateModelProviderNullableFields(t *testing.T) {
 	store := testStore(t)
 	defer store.Close()

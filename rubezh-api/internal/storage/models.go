@@ -19,6 +19,12 @@ var ErrModelProviderExists = errors.New(
 var ErrModelProviderNotFound = errors.New(
 	"storage: провайдер модели не найден")
 
+// ErrModelProviderReferenced — провайдера нельзя удалить: на него ссылаются
+// другие записи (chat_messages / audit_events). Append-only-история не должна
+// разрушаться каскадом — вызывающему предлагается soft-disable вместо delete.
+var ErrModelProviderReferenced = errors.New(
+	"storage: провайдер используется в истории и не может быть удалён")
+
 // ModelProvider — запись провайдера модели из таблицы model_providers.
 // MaxTokens и RateLimitPerMin nullable: nil означает «без ограничения».
 // APIKeyEncrypted — AES-256-GCM зашифрованный API-ключ (миграция 000009);
@@ -26,17 +32,17 @@ var ErrModelProviderNotFound = errors.New(
 // Поле не возвращается в публичных DTO; LogValue() гарантирует, что
 // шифротекст не попадёт в логи (инвариант "никакого raw в логах").
 type ModelProvider struct {
-	ID                string
-	Name              string
-	TrustLevel        string
-	Adapter           string
-	Endpoint          string
-	MaxTokens         *int
-	RateLimitPerMin   *int
-	IsEnabled         bool
-	APIKeyEncrypted   []byte
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	ID              string
+	Name            string
+	TrustLevel      string
+	Adapter         string
+	Endpoint        string
+	MaxTokens       *int
+	RateLimitPerMin *int
+	IsEnabled       bool
+	APIKeyEncrypted []byte
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // HasAPIKey — есть ли зашифрованный ключ (для DTO и main-логики).
@@ -143,6 +149,50 @@ func (s *Storage) CreateModelProvider(
 		return ModelProvider{}, fmt.Errorf("storage: создание провайдера: %w", err)
 	}
 	return created, nil
+}
+
+// SetModelProviderEnabled включает/выключает провайдера (soft-disable).
+// Возвращает обновлённую запись; ErrModelProviderNotFound, если id нет.
+// Выключенный провайдер скрывается из chat-picker'а, но остаётся в БД и
+// в истории (в отличие от DeleteModelProvider).
+func (s *Storage) SetModelProviderEnabled(
+	ctx context.Context, id string, enabled bool,
+) (ModelProvider, error) {
+	var p ModelProvider
+	err := s.pool.QueryRow(ctx,
+		`UPDATE model_providers SET is_enabled = $2, updated_at = now()
+		   WHERE id = $1
+		 RETURNING `+modelProviderColumns,
+		id, enabled,
+	).Scan(&p.ID, &p.Name, &p.TrustLevel, &p.Adapter, &p.Endpoint,
+		&p.MaxTokens, &p.RateLimitPerMin, &p.IsEnabled,
+		&p.APIKeyEncrypted, &p.CreatedAt, &p.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ModelProvider{}, ErrModelProviderNotFound
+	}
+	if err != nil {
+		return ModelProvider{}, fmt.Errorf("storage: toggle is_enabled: %w", err)
+	}
+	return p, nil
+}
+
+// DeleteModelProvider удаляет провайдера. ErrModelProviderNotFound, если id нет;
+// ErrModelProviderReferenced (FK 23503), если на провайдера ссылается история
+// (chat_messages / audit_events) — тогда вызывающий предлагает soft-disable.
+func (s *Storage) DeleteModelProvider(ctx context.Context, id string) error {
+	cmd, err := s.pool.Exec(ctx,
+		`DELETE FROM model_providers WHERE id = $1`, id)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			return ErrModelProviderReferenced
+		}
+		return fmt.Errorf("storage: удаление провайдера: %w", err)
+	}
+	if cmd.RowsAffected() == 0 {
+		return ErrModelProviderNotFound
+	}
+	return nil
 }
 
 // UpdateModelProviderAPIKey обновляет зашифрованный ключ провайдера.

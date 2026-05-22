@@ -23,9 +23,9 @@ type Deps struct {
 	Logger        *slog.Logger
 	Store         *storage.Storage
 	AuthSecret    string
-	Router        *llm.Router    // LLM Router; используется /api/chat
-	SanitizerURL  string         // базовый URL сервиса rubezh-sanitizer
-	MappingCipher *crypto.Cipher // AES-GCM для pseudonym_mappings; nil ⇒ mappings не пишутся (только для тестов)
+	Router        *llm.Router          // LLM Router; используется /api/chat
+	SanitizerURL  string               // базовый URL сервиса rubezh-sanitizer
+	MappingCipher *crypto.Cipher       // AES-GCM для pseudonym_mappings; nil ⇒ mappings не пишутся (только для тестов)
 	Minio         *storage.MinioClient // MinIO для документов (Итерация 10); nil ⇒ /api/documents 503
 	// ReloadRouter — hot-reload LLM Router из БД (F2). nil ⇒ изменения
 	// провайдеров видны только после restart api (только для тестов).
@@ -63,6 +63,10 @@ func NewRouter(deps Deps) (http.Handler, *chat.Orchestrator) {
 		api.Post("/models/{id}/api-key",
 			updateModelAPIKeyHandler(
 				deps.Store, deps.MappingCipher, deps.ReloadRouter, deps.Logger))
+		api.Patch("/models/{id}",
+			patchModelHandler(deps.Store, deps.ReloadRouter, deps.Logger))
+		api.Delete("/models/{id}",
+			deleteModelHandler(deps.Store, deps.ReloadRouter, deps.Logger))
 		api.Get("/chat/sessions", listChatSessionsHandler(deps.Store))
 		api.Post("/chat/sessions", createChatSessionHandler(deps.Store))
 		api.Get("/chat/sessions/{id}/messages",
