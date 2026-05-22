@@ -2,6 +2,30 @@ import { useState } from "react";
 import { ChevronDown, AlertTriangle, ShieldCheck } from "lucide-react";
 import type { Model } from "../api/schemas";
 
+// modelSuggestions — частые имена моделей по провайдеру (для подсказок выбора).
+// Это лишь подсказки; поле остаётся свободным вводом.
+function modelSuggestions(providerName: string): string[] {
+  const n = providerName.toLowerCase();
+  if (n.includes("deepseek")) {
+    return n.includes("local")
+      ? ["deepseek-r1-distill-qwen-7b"]
+      : ["deepseek-chat", "deepseek-reasoner"];
+  }
+  if (n.includes("claude") || n.includes("anthropic")) {
+    return ["claude-sonnet-4-6", "claude-opus-4-7", "claude-haiku-4-5-20251001"];
+  }
+  if (n.includes("gpt") || n.includes("openai")) {
+    return ["gpt-4o", "gpt-4o-mini"];
+  }
+  if (n.includes("gemini") || n.includes("google")) {
+    return ["gemini-2.0-flash", "gemini-2.5-pro"];
+  }
+  if (n.includes("grok") || n.includes("xai")) {
+    return ["grok-2-latest"];
+  }
+  return [];
+}
+
 interface PickerProps {
   providers: Model[];
   providerName: string;
@@ -81,9 +105,32 @@ export function ProviderModelPicker({
           <input
             value={modelName}
             onChange={(e) => onModelChange(e.target.value)}
-            placeholder="например: deepseek-r1-distill-qwen-7b"
+            list="model-suggestions"
+            placeholder="например: deepseek-chat"
             className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs font-mono focus:outline-none focus:border-cyan-500"
           />
+          <datalist id="model-suggestions">
+            {modelSuggestions(active.name).map((m) => (
+              <option key={m} value={m} />
+            ))}
+          </datalist>
+          {modelSuggestions(active.name).length > 0 && (
+            <div className="flex flex-wrap gap-1 mt-1.5">
+              {modelSuggestions(active.name).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => onModelChange(m)}
+                  className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
+                    modelName === m
+                      ? "bg-cyan-500/15 text-cyan-300"
+                      : "bg-slate-800 text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+          )}
           <p className="text-[10px] text-slate-500 mt-1.5 leading-relaxed">
             Имя модели передаётся как поле <code>model</code> в OpenAI-
             совместимый endpoint провайдера. Сохраняется в&nbsp;localStorage.
