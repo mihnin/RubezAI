@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -35,6 +36,7 @@ type chatOrchestrator interface {
 // previewOrchestrator — зависимость POST /api/chat/preview (J.1).
 type previewOrchestrator interface {
 	Preview(ctx context.Context, req chat.Request) (sanitizer.PreviewResponse, string, error)
+	PreviewFromSanitized(ctx context.Context, req chat.Request, p sanitizer.PreviewResponse) (string, error)
 }
 
 // --- DTO HTTP-слоя, согласованные с docs/contracts/chat.schema.json ---
@@ -50,9 +52,12 @@ type chatRequestDTO struct {
 }
 
 // chatPreviewRequestDTO — тело POST /api/chat/preview (J.1).
+// Либо text (свободный ввод), либо document_id (чат с документом, J.3) —
+// тогда берётся уже обезличенный текст документа.
 type chatPreviewRequestDTO struct {
-	Text     string `json:"text"`
-	Provider string `json:"provider"`
+	Text       string  `json:"text"`
+	Provider   string  `json:"provider"`
+	DocumentID *string `json:"document_id"`
 }
 
 // chatPreviewEntityDTO — сущность в предпросмотре: whitelist без позиций и
@@ -352,16 +357,17 @@ func previewChatHandler(
 			http.Error(w, "некорректный JSON", http.StatusBadRequest)
 			return
 		}
-		if dto.Text == "" {
-			http.Error(w, "поле text обязательно", http.StatusBadRequest)
+		if dto.Provider == "" {
+			http.Error(w, "поле provider обязательно", http.StatusBadRequest)
+			return
+		}
+		hasDoc := dto.DocumentID != nil && *dto.DocumentID != ""
+		if dto.Text == "" && !hasDoc {
+			http.Error(w, "нужен text или document_id", http.StatusBadRequest)
 			return
 		}
 		if utf8.RuneCountInString(dto.Text) > _maxChatMessageRunes {
 			http.Error(w, "text слишком длинный", http.StatusBadRequest)
-			return
-		}
-		if dto.Provider == "" {
-			http.Error(w, "поле provider обязательно", http.StatusBadRequest)
 			return
 		}
 		provider, cerr := resolveProvider(r.Context(), store, llmRouter, dto.Provider)
@@ -377,7 +383,21 @@ func previewChatHandler(
 			Provider: provider.Name, ProviderID: provider.ID,
 			ModelTrust: provider.TrustLevel,
 		}
-		preview, token, err := orch.Preview(r.Context(), req)
+		var preview sanitizer.PreviewResponse
+		var token string
+		if hasDoc {
+			// J.3: чат с документом — берём уже обезличенный текст документа.
+			docPreview, derr := documentPreview(
+				r.Context(), store, *dto.DocumentID, userID, string(role))
+			if derr != nil {
+				http.Error(w, derr.message, derr.code)
+				return
+			}
+			preview = docPreview
+			token, err = orch.PreviewFromSanitized(r.Context(), req, preview)
+		} else {
+			preview, token, err = orch.Preview(r.Context(), req)
+		}
 		if err != nil {
 			logger.Warn("предпросмотр чата не удался",
 				"error", err, "request_id", req.RequestID)
@@ -412,6 +432,56 @@ func nonNilStrings(s []string) []string {
 		return []string{}
 	}
 	return s
+}
+
+// documentPreview собирает PreviewResponse из УЖЕ обезличенного документа
+// (J.3): склейка sanitized-чанков + entities/risk из sanitization_results.
+// ACL: owner/admin (через CheckDocumentAccess). raw документа недоступен.
+func documentPreview(
+	ctx context.Context, store *storage.Storage,
+	docID, userID, role string,
+) (sanitizer.PreviewResponse, *chatError) {
+	if !isUUID(docID) {
+		return sanitizer.PreviewResponse{}, &chatError{
+			http.StatusBadRequest, "некорректный document_id"}
+	}
+	doc, err := store.GetDocument(ctx, docID)
+	if errors.Is(err, storage.ErrDocumentNotFound) {
+		return sanitizer.PreviewResponse{}, &chatError{
+			http.StatusNotFound, "документ не найден"}
+	}
+	if err != nil {
+		return sanitizer.PreviewResponse{}, &chatError{
+			http.StatusInternalServerError, "ошибка чтения документа"}
+	}
+	if err := storage.CheckDocumentAccess(doc, userID, role); err != nil {
+		return sanitizer.PreviewResponse{}, &chatError{
+			http.StatusNotFound, "документ не найден"}
+	}
+	chunks, err := store.ListDocumentChunks(ctx, docID)
+	if err != nil || len(chunks) == 0 {
+		return sanitizer.PreviewResponse{}, &chatError{
+			http.StatusBadRequest, "документ ещё не обработан"}
+	}
+	var b strings.Builder
+	for _, c := range chunks {
+		b.WriteString(c.Content)
+		b.WriteString("\n")
+	}
+	sr, err := store.GetDocumentSanitizationResult(ctx, docID)
+	if err != nil {
+		return sanitizer.PreviewResponse{}, &chatError{
+			http.StatusBadRequest, "документ ещё не обработан"}
+	}
+	var entities []sanitizer.Entity
+	_ = json.Unmarshal(sr.EntitiesJSON, &entities) // jsonb по контракту Entity
+	return sanitizer.PreviewResponse{
+		SanitizedText: b.String(),
+		Entities:      entities,
+		Risk: sanitizer.Risk{
+			Level: sr.RiskLevel, Score: sr.RiskScore, Classes: sr.RiskClasses,
+		},
+	}, nil
 }
 
 // chatError — ошибка этапа подготовки чата с HTTP-статусом.

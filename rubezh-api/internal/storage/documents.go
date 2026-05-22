@@ -221,6 +221,39 @@ func (s *Storage) RetryDocument(ctx context.Context, id string) error {
 	return nil
 }
 
+// DocumentSanitizationResult — агрегированный результат обезличивания документа
+// (sanitization_results): entities (jsonb как есть) + риск. Используется для
+// «чата с документом» (J.3): обезличенный текст уже в document_chunks.
+type DocumentSanitizationResult struct {
+	EntitiesJSON []byte
+	RiskLevel    string
+	RiskScore    float64
+	RiskClasses  []string
+}
+
+// GetDocumentSanitizationResult читает sanitization_results документа.
+// ErrDocumentNotFound, если результата нет (документ не обработан).
+func (s *Storage) GetDocumentSanitizationResult(
+	ctx context.Context, documentID string,
+) (DocumentSanitizationResult, error) {
+	var r DocumentSanitizationResult
+	err := s.pool.QueryRow(ctx,
+		`SELECT entities, risk_level, risk_score, risk_classes
+		   FROM sanitization_results
+		  WHERE document_id = $1
+		  ORDER BY created_at DESC LIMIT 1`,
+		documentID,
+	).Scan(&r.EntitiesJSON, &r.RiskLevel, &r.RiskScore, &r.RiskClasses)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return DocumentSanitizationResult{}, ErrDocumentNotFound
+	}
+	if err != nil {
+		return DocumentSanitizationResult{}, fmt.Errorf(
+			"storage: sanitization документа: %w", err)
+	}
+	return r, nil
+}
+
 // ListDocumentChunks возвращает чанки (sanitized content) с JOIN
 // sanitization_results для risk-метаданных.
 func (s *Storage) ListDocumentChunks(

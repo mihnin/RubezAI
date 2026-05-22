@@ -85,6 +85,20 @@ func (o *Orchestrator) Preview(
 	return preview, token, nil
 }
 
+// PreviewFromSanitized кэширует УЖЕ обезличенный результат (J.3: документ
+// обезличивается worker'ом на загрузке — повторный sanitize не нужен). pmap
+// пустой: raw документа недоступен (worker не пишет mappings), поэтому
+// reveal для контента документа невозможен — это осознанно. Возвращает токен.
+func (o *Orchestrator) PreviewFromSanitized(
+	_ context.Context, req Request, preview sanitizer.PreviewResponse,
+) (string, error) {
+	if o.previewCache == nil {
+		return "", fmt.Errorf("chat: preview-кэш не инициализирован")
+	}
+	return o.previewCache.put(
+		previewResult{preview: preview}, req.UserID, req.SessionID)
+}
+
 // consumePreview достаёт закэшированный результат по preview_token (J.0).
 // Возвращает ok=false, если токен пуст/не найден/чужой/просрочен — тогда
 // Prepare выполняет свежий sanitize (текст тот же, фильтр 1 детерминирован).

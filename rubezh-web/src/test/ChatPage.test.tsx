@@ -193,7 +193,6 @@ describe("ChatPage — provider/model picker (G.2c)", () => {
     fireEvent.change(screen.getByLabelText("Сообщение"), {
       target: { value: "привет" },
     });
-    // picker без активного провайдера — это div, поэтому Send единственная кнопка
-    expect(screen.getByRole("button")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Отправить" })).toBeDisabled();
   });
 });

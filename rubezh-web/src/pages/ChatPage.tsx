@@ -1,34 +1,21 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import {
-  Send,
-  ShieldAlert,
-  Sparkles,
-  AlertCircle,
-  Eye,
-} from "lucide-react";
+import { Send, Sparkles, AlertCircle, Paperclip, X } from "lucide-react";
 import { streamChat } from "../api/sse";
 import { apiFetch } from "../api/client";
 import { CloudGate } from "../components/CloudGate";
 import { ProviderModelPicker } from "../components/ProviderModelPicker";
+import { MessageBubble, type Message } from "../components/MessageBubble";
 import {
   ModelListSchema,
   ChatSessionSchema,
   RevealSchema,
   ChatPreviewSchema,
+  DocumentSchema,
   type ChatEvent,
   type ChatPreview,
   type Model,
 } from "../api/schemas";
-
-interface Message {
-  role: "user" | "assistant";
-  content: string;
-  decision?: string;
-  reasons?: string[];
-  id?: string; // id сообщения ассистента (из SSE done) — для reveal (J.2)
-  revealed?: boolean; // раскрыты ли реальные данные
-}
 
 const STORAGE_PROVIDER = "rubezh.chat.provider";
 const STORAGE_MODEL = "rubezh.chat.model";
@@ -46,6 +33,12 @@ export default function ChatPage() {
   // Гейт предпросмотра перед отправкой в облако (J.1) и индикатор обработки.
   const [gate, setGate] = useState<(ChatPreview & { input: string }) | null>(null);
   const [previewing, setPreviewing] = useState(false);
+  // Прикреплённый документ (J.3): загружается и обрабатывается, затем его
+  // обезличенный текст отправляется в чат вместо/вместе с вводом.
+  const [doc, setDoc] = useState<
+    { id: string; filename: string; status: string } | null
+  >(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -94,7 +87,9 @@ export default function ChatPage() {
   useEffect(() => () => abortRef.current?.abort(), []);
 
   async function send() {
-    if (!input.trim() || streaming || previewing) return;
+    if (streaming || previewing) return;
+    const readyDoc = doc?.status === "done" ? doc : null;
+    if (!input.trim() && !readyDoc) return;
     if (!activeProvider) {
       setError(
         "Нет активных LLM-провайдеров. Откройте «Модели» и создайте провайдера.",
@@ -102,18 +97,30 @@ export default function ChatPage() {
       return;
     }
     const text = input;
-    // Облачная модель (external) → гейт предпросмотра: показываем обезличенный
-    // текст и просим подтвердить (данные выходят за контур). Локальная
-    // (trusted_local) → сразу, raw остаётся в периметре.
-    if (activeProvider.trust_level === "external") {
+    // Документ имеет приоритет: в чат уходит его обезличенный текст. В ленте
+    // показываем «📎 имя файла».
+    const displayText = readyDoc ? `📎 ${readyDoc.filename}` : text;
+    // Preview нужен, если облако (для гейта) ИЛИ есть документ (его текст
+    // отправляется по preview_token, а не через message).
+    if (activeProvider.trust_level === "external" || readyDoc) {
       setError(null);
       setPreviewing(true);
       try {
+        const body = readyDoc
+          ? { document_id: readyDoc.id, provider: activeProvider.name }
+          : { text, provider: activeProvider.name };
         const data = await apiFetch("/api/chat/preview", ChatPreviewSchema, {
           method: "POST",
-          body: JSON.stringify({ text, provider: activeProvider.name }),
+          body: JSON.stringify(body),
         });
-        setGate({ ...data, input: text });
+        if (activeProvider.trust_level === "external") {
+          setGate({ ...data, input: displayText });
+        } else {
+          // локальная модель + документ: гейт не нужен, но шлём через токен
+          setInput("");
+          setDoc(null);
+          await doSend(displayText, data.preview_token);
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : "ошибка обезличивания");
       } finally {
@@ -162,6 +169,33 @@ export default function ChatPage() {
     } finally {
       setStreaming(false);
       abortRef.current = null;
+    }
+  }
+
+  // J.3: загрузка документа в чат — upload + опрос статуса обработки.
+  async function handleAttach(file: File) {
+    setError(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const created = await apiFetch("/api/documents", DocumentSchema, {
+        method: "POST",
+        body: fd,
+      });
+      setDoc({ id: created.id, filename: created.filename, status: created.status });
+      for (let i = 0; i < 60; i++) {
+        await new Promise((r) => setTimeout(r, 1500));
+        const d = await apiFetch(`/api/documents/${created.id}`, DocumentSchema);
+        setDoc((cur) =>
+          cur && cur.id === created.id ? { ...cur, status: d.status } : cur,
+        );
+        if (d.status === "done" || d.status === "failed") break;
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "не удалось загрузить документ");
+      setDoc(null);
+    } finally {
+      if (fileRef.current) fileRef.current.value = "";
     }
   }
 
@@ -271,12 +305,32 @@ export default function ChatPage() {
             const g = gate;
             setGate(null);
             setInput("");
+            setDoc(null);
             doSend(g.input, g.preview_token);
           }}
         />
       )}
       <footer className="border-t border-slate-800 p-4 bg-slate-950">
-        <div className="flex gap-2 max-w-4xl mx-auto">
+        <div className="flex gap-2 max-w-4xl mx-auto items-stretch">
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".pdf,.docx,.txt"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) handleAttach(f);
+            }}
+          />
+          <button
+            onClick={() => fileRef.current?.click()}
+            disabled={streaming || !!doc}
+            title="Прикрепить документ"
+            aria-label="Прикрепить документ"
+            className="px-3 self-stretch rounded-lg border border-slate-800 text-slate-400 hover:text-cyan-300 hover:border-slate-700 disabled:opacity-40 transition"
+          >
+            <Paperclip className="w-4 h-4" strokeWidth={2} />
+          </button>
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -290,11 +344,20 @@ export default function ChatPage() {
             rows={2}
             aria-label="Сообщение"
             className="flex-1 bg-slate-900 border border-slate-800 rounded-lg p-3 text-sm resize-none focus:outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20 transition placeholder:text-slate-600"
-            placeholder="Введите сообщение… (Enter — отправить, Shift+Enter — новая строка)"
+            placeholder={
+              doc
+                ? "Документ будет отправлен (можно без текста)"
+                : "Введите сообщение… (Enter — отправить, Shift+Enter — новая строка)"
+            }
           />
           <button
             onClick={send}
-            disabled={streaming || !input.trim() || !activeProvider}
+            aria-label="Отправить"
+            disabled={
+              streaming ||
+              (!input.trim() && doc?.status !== "done") ||
+              !activeProvider
+            }
             className="px-4 self-stretch rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-medium disabled:opacity-40 disabled:cursor-not-allowed transition shadow-lg shadow-cyan-500/20 flex items-center gap-1.5"
           >
             {streaming ? (
@@ -304,6 +367,34 @@ export default function ChatPage() {
             )}
           </button>
         </div>
+        {doc && (
+          <div className="max-w-4xl mx-auto mt-2 text-xs inline-flex items-center gap-2 bg-slate-900/60 border border-slate-800 rounded-lg px-3 py-1.5">
+            <Paperclip className="w-3.5 h-3.5 text-slate-400" strokeWidth={2} />
+            <span className="text-slate-300">{doc.filename}</span>
+            <span
+              className={
+                doc.status === "done"
+                  ? "text-emerald-300"
+                  : doc.status === "failed"
+                    ? "text-red-300"
+                    : "text-amber-300"
+              }
+            >
+              {doc.status === "done"
+                ? "✓ обработан"
+                : doc.status === "failed"
+                  ? "✗ ошибка"
+                  : "обрабатывается…"}
+            </span>
+            <button
+              onClick={() => setDoc(null)}
+              aria-label="Убрать документ"
+              className="text-slate-500 hover:text-red-400"
+            >
+              <X className="w-3.5 h-3.5" strokeWidth={2} />
+            </button>
+          </div>
+        )}
       </footer>
     </div>
   );
@@ -362,79 +453,3 @@ function annotateLast(
   return [...list.slice(0, -1), { ...last, decision, reasons }];
 }
 
-function MessageBubble({
-  message,
-  streaming,
-  onReveal,
-}: {
-  message: Message;
-  streaming: boolean;
-  onReveal?: () => void;
-}) {
-  const isUser = message.role === "user";
-  // J.2: раскрытие доступно для записанного masked-ответа, ещё не раскрытого
-  const canReveal =
-    !isUser && !!message.id && message.decision === "allow_masked" &&
-    !message.revealed;
-  const decisionBad =
-    message.decision &&
-    (message.decision === "deny" || message.decision === "escalate");
-  const decisionWarn =
-    message.decision && message.decision === "allow_masked";
-  return (
-    <div className={`max-w-3xl ${isUser ? "ml-auto" : ""}`}>
-      <div
-        className={`px-4 py-3 rounded-2xl ${
-          isUser
-            ? "bg-cyan-500/15 border border-cyan-500/30 rounded-br-md"
-            : "bg-slate-800/40 border border-slate-700/60 rounded-bl-md"
-        }`}
-      >
-        <div className="whitespace-pre-wrap text-sm leading-relaxed text-slate-100">
-          {message.content || (streaming ? "…" : "")}
-        </div>
-        {canReveal && (
-          <button
-            onClick={onReveal}
-            className="mt-2.5 text-xs inline-flex items-center gap-1 text-cyan-400 hover:text-cyan-300"
-          >
-            <Eye className="w-3.5 h-3.5" strokeWidth={2} />
-            Показать реальные данные
-          </button>
-        )}
-        {message.revealed && (
-          <div className="mt-2.5 text-xs inline-flex items-center gap-1 text-emerald-300">
-            <Eye className="w-3.5 h-3.5" strokeWidth={2} />
-            раскрыто · записано в аудит
-          </div>
-        )}
-        {message.decision && message.decision !== "allow_raw" && (
-          <div
-            className={`mt-2.5 pt-2 border-t border-slate-700/50 text-xs flex items-start gap-1.5 ${
-              decisionBad
-                ? "text-red-300"
-                : decisionWarn
-                  ? "text-amber-300"
-                  : "text-slate-400"
-            }`}
-            data-testid="decision-banner"
-          >
-            <ShieldAlert
-              className="w-3.5 h-3.5 mt-0.5 shrink-0"
-              strokeWidth={2}
-            />
-            <div>
-              <strong>{message.decision}</strong>
-              {message.reasons && message.reasons.length > 0 && (
-                <span className="text-slate-500">
-                  {" "}
-                  · {message.reasons.join(", ")}
-                </span>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
