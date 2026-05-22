@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
-import { FileText, Upload, Trash2, FilePlus } from "lucide-react";
-import { apiFetch, apiFetchRaw } from "../api/client";
+import { FileText, Upload, Trash2, FilePlus, Download, ShieldCheck } from "lucide-react";
+import { apiFetch, apiFetchRaw, apiDownload } from "../api/client";
 import { DocumentListSchema, type Document as DocItem } from "../api/schemas";
 import { SkeletonRows } from "../components/Skeleton";
 import { EmptyState } from "../components/EmptyState";
@@ -128,16 +128,46 @@ export default function DocumentsPage() {
                       : "—"}
                   </td>
                   <td className="p-3 text-right">
-                    <button
-                      onClick={() => {
-                        if (confirm(`Удалить ${d.filename}?`))
-                          delMut.mutate(d.id);
-                      }}
-                      title="Удалить"
-                      className="inline-flex items-center justify-center w-7 h-7 rounded text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" strokeWidth={2} />
-                    </button>
+                    <div className="inline-flex items-center gap-1">
+                      {d.status === "done" && (
+                        <>
+                          <button
+                            onClick={() =>
+                              apiDownload(
+                                `/api/documents/${d.id}/download`,
+                                d.filename,
+                              )
+                            }
+                            title="Скачать оригинал"
+                            className="inline-flex items-center justify-center w-7 h-7 rounded text-slate-500 hover:text-cyan-300 hover:bg-cyan-500/10 transition"
+                          >
+                            <Download className="w-3.5 h-3.5" strokeWidth={2} />
+                          </button>
+                          <button
+                            onClick={() =>
+                              apiDownload(
+                                `/api/documents/${d.id}/masked`,
+                                `${d.filename}-masked.txt`,
+                              )
+                            }
+                            title="Скачать обезличенный (.txt)"
+                            className="inline-flex items-center justify-center w-7 h-7 rounded text-slate-500 hover:text-emerald-300 hover:bg-emerald-500/10 transition"
+                          >
+                            <ShieldCheck className="w-3.5 h-3.5" strokeWidth={2} />
+                          </button>
+                        </>
+                      )}
+                      <button
+                        onClick={() => {
+                          if (confirm(`Удалить ${d.filename}?`))
+                            delMut.mutate(d.id);
+                        }}
+                        title="Удалить"
+                        className="inline-flex items-center justify-center w-7 h-7 rounded text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" strokeWidth={2} />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}

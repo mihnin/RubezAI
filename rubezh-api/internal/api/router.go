@@ -100,6 +100,8 @@ func NewRouter(deps Deps) (http.Handler, *chat.Orchestrator) {
 			listDocumentChunksHandler(deps.Store))
 		api.Get("/documents/{id}/download",
 			downloadDocumentHandler(deps.Store, deps.Minio))
+		api.Get("/documents/{id}/masked",
+			downloadMaskedDocumentHandler(deps.Store))
 		api.Delete("/documents/{id}",
 			deleteDocumentHandler(deps.Store, deps.Minio))
 		api.Post("/documents/{id}/retry",

@@ -315,6 +315,56 @@ func downloadDocumentHandler(
 	}
 }
 
+// downloadMaskedDocumentHandler — GET /api/documents/:id/masked (owner+admin).
+// Отдаёт обезличенную текстовую версию: склейку sanitized-чанков (raw в ней
+// уже заменён псевдонимами). Форматирование исходного документа НЕ сохраняется
+// (MVP; masked-DOCX — техдолг). Действие журналируется.
+func downloadMaskedDocumentHandler(store *storage.Storage) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		if !isUUID(id) {
+			http.NotFound(w, r)
+			return
+		}
+		doc, err := store.GetDocument(r.Context(), id)
+		if errors.Is(err, storage.ErrDocumentNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		if err != nil {
+			http.Error(w, "ошибка", http.StatusInternalServerError)
+			return
+		}
+		userID, _ := currentUserID(r, store)
+		role, _ := auth.RoleFromContext(r.Context())
+		if err := storage.CheckDocumentAccess(doc, userID, string(role)); err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		chunks, err := store.ListDocumentChunks(r.Context(), id)
+		if err != nil {
+			http.Error(w, "ошибка чтения", http.StatusInternalServerError)
+			return
+		}
+		// Чанки уже отсортированы по chunk_index (см. ListDocumentChunks).
+		var b strings.Builder
+		b.WriteString(
+			"# Обезличенная версия (форматирование не сохранено)\n\n")
+		for _, c := range chunks {
+			b.WriteString(c.Content)
+			b.WriteString("\n")
+		}
+		_, _ = store.InsertAuditEvent(r.Context(), storage.AuditEvent{
+			UserID: userID, EventType: "document_masked_downloaded",
+			Detail: map[string]any{"document_id": doc.ID, "chunks": len(chunks)},
+		})
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Content-Disposition",
+			`attachment; filename="`+doc.Filename+`-masked.txt"`)
+		_, _ = w.Write([]byte(b.String()))
+	}
+}
+
 // deleteDocumentHandler — DELETE /api/documents/:id (owner+admin).
 // hard-delete MinIO + soft-delete БД.
 func deleteDocumentHandler(
