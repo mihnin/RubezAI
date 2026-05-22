@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Cpu, Plus, Key, ShieldCheck, AlertTriangle } from "lucide-react";
-import { apiFetch, apiFetchRaw } from "../api/client";
+import { Cpu, Plus, Key, ShieldCheck, AlertTriangle, Power, Trash2 } from "lucide-react";
+import { apiFetch, apiFetchRaw, ApiError } from "../api/client";
 import { useAuth } from "../auth/context";
 import { ModelListSchema, type Model } from "../api/schemas";
 import { SkeletonRows } from "../components/Skeleton";
@@ -77,6 +77,8 @@ function ModelRow({ model, canWrite }: { model: Model; canWrite: boolean }) {
   const qc = useQueryClient();
   const [editKey, setEditKey] = useState(false);
   const [newKey, setNewKey] = useState("");
+  const [confirmDel, setConfirmDel] = useState(false);
+  const [delErr, setDelErr] = useState<string | null>(null);
 
   const updMut = useMutation({
     mutationFn: () =>
@@ -88,6 +90,32 @@ function ModelRow({ model, canWrite }: { model: Model; canWrite: boolean }) {
       setEditKey(false);
       setNewKey("");
       qc.invalidateQueries({ queryKey: ["models"] });
+    },
+  });
+
+  const toggleMut = useMutation({
+    mutationFn: () =>
+      apiFetchRaw(`/api/models/${model.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ is_enabled: !model.is_enabled }),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["models"] }),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: () =>
+      apiFetchRaw(`/api/models/${model.id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      setConfirmDel(false);
+      qc.invalidateQueries({ queryKey: ["models"] });
+    },
+    onError: (e: Error) => {
+      // 409 — провайдер в истории: предлагаем soft-disable вместо удаления.
+      setDelErr(
+        e instanceof ApiError && e.status === 409
+          ? "Провайдер используется в истории. Удаление невозможно — выключите его."
+          : e.message,
+      );
     },
   });
 
@@ -141,6 +169,63 @@ function ModelRow({ model, canWrite }: { model: Model; canWrite: boolean }) {
           </div>
         )}
       </div>
+      {canWrite && (
+        <div className="mt-3 pt-3 border-t border-slate-800 flex items-center gap-4 flex-wrap">
+          <button
+            onClick={() => toggleMut.mutate()}
+            disabled={toggleMut.isPending}
+            className="text-xs inline-flex items-center gap-1 text-slate-300 hover:text-white disabled:opacity-40"
+          >
+            <Power className="w-3.5 h-3.5" strokeWidth={2.5} />
+            {model.is_enabled ? "Выключить" : "Включить"}
+          </button>
+          {!confirmDel ? (
+            <button
+              onClick={() => {
+                setDelErr(null);
+                setConfirmDel(true);
+              }}
+              className="text-xs inline-flex items-center gap-1 text-red-400 hover:text-red-300"
+            >
+              <Trash2 className="w-3.5 h-3.5" strokeWidth={2.5} />
+              Удалить
+            </button>
+          ) : (
+            <span className="text-xs inline-flex items-center gap-2">
+              <span className="text-slate-400">Удалить безвозвратно?</span>
+              <button
+                onClick={() => deleteMut.mutate()}
+                disabled={deleteMut.isPending}
+                className="px-2 py-0.5 rounded bg-red-500 text-slate-950 font-medium disabled:opacity-40"
+              >
+                Да
+              </button>
+              <button
+                onClick={() => setConfirmDel(false)}
+                className="text-slate-500"
+              >
+                Отмена
+              </button>
+            </span>
+          )}
+        </div>
+      )}
+      {delErr && (
+        <div className="mt-2 text-xs text-red-300 flex items-center gap-2 ml-12">
+          <AlertTriangle className="w-3.5 h-3.5" strokeWidth={2.5} />
+          {delErr}
+          <button
+            onClick={() => {
+              setConfirmDel(false);
+              setDelErr(null);
+              if (model.is_enabled) toggleMut.mutate();
+            }}
+            className="underline hover:text-red-200"
+          >
+            Выключить вместо удаления
+          </button>
+        </div>
+      )}
       {canWrite && (
         <div className="mt-3 pt-3 border-t border-slate-800">
           {!editKey ? (
