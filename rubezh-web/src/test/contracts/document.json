@@ -1,0 +1,14 @@
+{
+  "content_type": "?string",
+  "created_at": "string",
+  "error": "?string",
+  "filename": "string",
+  "id": "string",
+  "owner_id": "string",
+  "phase": "?string",
+  "processing_attempts": "number",
+  "processing_started_at": "?string",
+  "size_bytes": "?number",
+  "status": "string",
+  "updated_at": "string"
+}

@@ -5,8 +5,7 @@ on:
     branches: [main]
   pull_request:
 
-# Задания: sanitizer, api, migrations, compose.
-# Задание rubezh-web (frontend) добавится в итерации 12.
+# Задания: sanitizer, api, web, migrations, compose.
 
 jobs:
   sanitizer:
@@ -102,6 +101,44 @@ jobs:
         run: go test -race ./...
         env:
           TEST_DATABASE_URL: postgres://rubezh:rubezh@localhost:5432/rubezh?sslmode=disable
+
+  web:
+    name: rubezh-web — тесты и сборка
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rubezh-web
+    steps:
+      - uses: actions/checkout@v4
+      - name: Установить Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: rubezh-web/package-lock.json
+      - name: Установить зависимости
+        run: npm ci
+      - name: Тесты (Vitest, в т. ч. контракт Go↔TS — G.1)
+        run: npm test
+      - name: Сборка (tsc + vite)
+        run: npm run build
+
+  contract-sync:
+    name: Контракт Go↔TS синхронизирован (G.1 golden)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rubezh-api
+    steps:
+      - uses: actions/checkout@v4
+      - name: Установить Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: Перегенерировать контракты и проверить отсутствие дрейфа
+        run: |
+          go test ./internal/api/ -run TestContractShape -count=1
+          test -z "$(git status --porcelain rubezh-web/src/test/contracts)"
 
   compose:
     name: Сборка образов и проверка docker compose

@@ -110,6 +110,19 @@ LLM-reviewer внутри `rubezh-sanitizer` (фильтр 2/3, см.
 `docs/ARCHITECTURE.md §2.1`). Пример: DeepSeek-R1-Distill-Qwen-7B через
 LM Studio на `host.docker.internal:1234`. Trust level = `trusted_local`.
 
+Включается переменными окружения санитайзера (H.3) — пусто по умолчанию
+(тогда работают только детерминированные детекторы, фильтр 1):
+
+```bash
+SANITIZER_LLM_URL=http://host.docker.internal:1234/v1
+SANITIZER_LLM_MODEL=deepseek-r1-distill-qwen-7b
+SANITIZER_LLM_TIMEOUT=20   # reasoning-моделям нужен запас
+```
+
+LLM **не принимает** решений allow/deny (это policy engine) и fail-open:
+её недоступность не ломает обезличивание — детектор просто не добавляет
+кандидатов. Подбирает то, что пропустил regex (контекстные секреты и т. п.).
+
 ### CLI
 
 Бинарь `rubezh` — статический Go-CLI к API. Сборка:
@@ -134,6 +147,32 @@ rubezh incidents list
 
 Все CLI-команды проходят тот же sanitizer + policy engine, что и Web UI;
 audit-trail и инциденты создаются одинаково.
+
+## Разработка
+
+### Контракт Go ↔ TypeScript (G.1)
+
+Go-DTO (`rubezh-api/internal/api/*.go`) и Zod-схемы
+(`rubezh-web/src/api/schemas.ts`) держатся синхронно автоматически:
+
+1. Go golden-тест `internal/api/contract_export_test.go` рефлексией DTO
+   генерирует нормализованные формы в `rubezh-web/src/test/contracts/*.json`.
+2. TS-тест `rubezh-web/src/test/contract.test.ts` сверяет эти формы с
+   Zod-схемами (поля, типы, nullability).
+
+**При изменении любого DTO:**
+
+```bash
+# 1. перегенерировать контракт (упадёт при дрейфе — это и есть сигнал)
+docker run --rm -v c:/dev/RubezAI:/repo -v rubezh-go-cache:/go/pkg/mod \
+  -w /repo/rubezh-api golang:1.25-bookworm \
+  go test ./internal/api/ -run TestContractShape
+# 2. закоммитить обновлённые rubezh-web/src/test/contracts/*.json
+# 3. привести Zod-схему в соответствие до зелёного npm test
+```
+
+CI гоняет оба теста (`web`) и проверяет отсутствие незакоммиченного дрейфа
+контракта (`contract-sync`). Подробнее — `docs/design/g1-contract-tests.md`.
 
 ## Статус проекта
 

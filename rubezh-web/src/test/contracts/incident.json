@@ -1,0 +1,16 @@
+{
+  "assignee_id": "?string",
+  "audit_event_id": "?string",
+  "closed_at": "?string",
+  "created_at": "string",
+  "id": "string",
+  "reporter_id": "?string",
+  "resolution": "?string",
+  "severity": "string",
+  "status": "string",
+  "summary": "?string",
+  "title": "string",
+  "trigger": "?string",
+  "updated_at": "string",
+  "user_id": "?string"
+}

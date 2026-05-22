@@ -1,0 +1,4 @@
+{
+  "events": "array",
+  "next_cursor": "?string"
+}

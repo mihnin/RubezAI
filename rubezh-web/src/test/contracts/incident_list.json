@@ -1,0 +1,4 @@
+{
+  "incidents": "array",
+  "next_cursor": "?string"
+}

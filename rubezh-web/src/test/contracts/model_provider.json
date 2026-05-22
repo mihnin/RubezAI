@@ -1,0 +1,13 @@
+{
+  "adapter": "string",
+  "created_at": "string",
+  "endpoint": "string",
+  "has_api_key": "boolean",
+  "id": "string",
+  "is_enabled": "boolean",
+  "max_tokens": "?number",
+  "name": "string",
+  "rate_limit_per_min": "?number",
+  "trust_level": "string",
+  "updated_at": "string"
+}
