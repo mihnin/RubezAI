@@ -64,6 +64,21 @@ export const ChatPreviewSchema = z.object({
 });
 export type ChatPreview = z.infer<typeof ChatPreviewSchema>;
 
+// Персональный ключ провайдера (L) — без самого ключа.
+export const UserCredentialSchema = z.object({
+  id: z.string(),
+  provider_id: z.string(),
+  provider_name: z.string(),
+  label: z.string().nullable(),
+  is_enabled: z.boolean(),
+  has_key: z.boolean(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  last_used_at: z.string().nullable(),
+});
+export const UserCredentialListSchema = z.array(UserCredentialSchema);
+export type UserCredential = z.infer<typeof UserCredentialSchema>;
+
 export const ChatErrorPayloadSchema = z.object({
   message: z.string(),
   request_id: z.string(),

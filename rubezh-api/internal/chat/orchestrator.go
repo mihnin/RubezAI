@@ -293,6 +293,7 @@ func (o *Orchestrator) runLLM(
 ) error {
 	resp, err := o.llm.Complete(ctx, req.Provider, llm.ChatRequest{
 		Model: req.Model, Messages: buildLLMMessages(act),
+		APIKeyOverride: req.APIKeyOverride,
 	})
 	if err != nil || resp.Content == "" {
 		// Полная ошибка пишется в slog для расследования (logs +

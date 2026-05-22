@@ -58,6 +58,9 @@ type Request struct {
 	// PreviewToken — одноразовый токен закэшированного предпросмотра (J.0).
 	// Если задан и валиден — Prepare переиспользует тот sanitize вместо нового.
 	PreviewToken string
+	// APIKeyOverride — персональный ключ пользователя к провайдеру (L); если
+	// непуст, LLM вызывается с ним вместо org-ключа.
+	APIKeyOverride string
 }
 
 // RiskView — оценка риска для SSE-события meta.

@@ -74,6 +74,11 @@ func NewRouter(deps Deps) (http.Handler, *chat.Orchestrator) {
 			patchModelHandler(deps.Store, deps.ReloadRouter, deps.Logger))
 		api.Delete("/models/{id}",
 			deleteModelHandler(deps.Store, deps.ReloadRouter, deps.Logger))
+		// Персональные ключи провайдеров (L) — только свои (user_id из токена).
+		api.Get("/me/credentials", listMyCredentialsHandler(deps.Store))
+		api.Post("/me/credentials",
+			createMyCredentialHandler(deps.Store, deps.MappingCipher))
+		api.Delete("/me/credentials/{id}", deleteMyCredentialHandler(deps.Store))
 		api.Get("/chat/sessions", listChatSessionsHandler(deps.Store))
 		api.Post("/chat/sessions", createChatSessionHandler(deps.Store))
 		api.Get("/chat/sessions/{id}/messages",
@@ -83,7 +88,7 @@ func NewRouter(deps Deps) (http.Handler, *chat.Orchestrator) {
 		api.Post("/chat/preview", previewChatHandler(
 			orchestrator, deps.Store, deps.Router, deps.Logger))
 		api.Post("/chat", chatHandler(
-			orchestrator, deps.Store, deps.Router, deps.Logger))
+			orchestrator, deps.Store, deps.Router, deps.MappingCipher, deps.Logger))
 		// Audit / Incidents — Итерация 9.
 		api.Get("/audit-events", listAuditEventsHandler(deps.Store))
 		api.Get("/audit-events/{id}", getAuditEventHandler(deps.Store))

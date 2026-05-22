@@ -73,7 +73,7 @@ func (p *OpenAIProvider) Complete(
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+	httpReq.Header.Set("Authorization", "Bearer "+keyOrDefault(req.APIKeyOverride, p.apiKey))
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {

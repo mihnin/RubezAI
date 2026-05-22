@@ -8,6 +8,7 @@ import ModelsPage from "./pages/ModelsPage";
 import AuditLogPage from "./pages/AuditLogPage";
 import IncidentsPage from "./pages/IncidentsPage";
 import HelpPage from "./pages/HelpPage";
+import CredentialsPage from "./pages/CredentialsPage";
 import AppLayout from "./components/AppLayout";
 
 export default function App() {
@@ -26,6 +27,7 @@ export default function App() {
         <Route path="/documents" element={<DocumentsPage />} />
         <Route path="/policies" element={<PoliciesPage />} />
         <Route path="/models" element={<ModelsPage />} />
+        <Route path="/credentials" element={<CredentialsPage />} />
         <Route path="/audit-log" element={<AuditLogPage />} />
         <Route path="/incidents" element={<IncidentsPage />} />
         <Route path="/help" element={<HelpPage />} />

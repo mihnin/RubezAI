@@ -17,12 +17,23 @@ type ChatMessage struct {
 type ChatRequest struct {
 	Model    string
 	Messages []ChatMessage
+	// APIKeyOverride — персональный ключ пользователя (L); если непуст, адаптер
+	// использует его вместо ключа провайдера. Endpoint/trust не меняются.
+	APIKeyOverride string
 }
 
 // ChatResponse — ответ LLM.
 type ChatResponse struct {
 	Content string
 	Model   string
+}
+
+// keyOrDefault возвращает override-ключ, если он непуст, иначе ключ провайдера.
+func keyOrDefault(override, fallback string) string {
+	if override != "" {
+		return override
+	}
+	return fallback
 }
 
 // Provider — интерфейс провайдера LLM. Реализации взаимозаменяемы, что

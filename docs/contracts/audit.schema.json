@@ -37,7 +37,9 @@
         "document_retry_requested",
         "search_performed",
         "response_revealed",
-        "document_masked_downloaded"
+        "document_masked_downloaded",
+        "provider_credential_added",
+        "provider_credential_removed"
       ]
     },
     "AuditRiskLevel": {

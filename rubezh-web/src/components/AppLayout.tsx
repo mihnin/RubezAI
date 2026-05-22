@@ -9,6 +9,7 @@ import {
   LogOut,
   ShieldCheck,
   HelpCircle,
+  KeyRound,
 } from "lucide-react";
 import { useAuth } from "../auth/context";
 
@@ -17,6 +18,7 @@ const NAV = [
   { to: "/documents", label: "Документы", icon: FileText },
   { to: "/policies", label: "Политики", icon: Shield },
   { to: "/models", label: "Модели", icon: Cpu },
+  { to: "/credentials", label: "Мои ключи", icon: KeyRound },
   { to: "/audit-log", label: "Аудит", icon: ClipboardList },
   { to: "/incidents", label: "Инциденты", icon: AlertTriangle },
   { to: "/help", label: "Помощь", icon: HelpCircle },

@@ -15,6 +15,7 @@ import (
 
 	"github.com/rubezh-ai/rubezh-api/internal/auth"
 	"github.com/rubezh-ai/rubezh-api/internal/chat"
+	"github.com/rubezh-ai/rubezh-api/internal/crypto"
 	"github.com/rubezh-ai/rubezh-api/internal/llm"
 	"github.com/rubezh-ai/rubezh-api/internal/sanitizer"
 	"github.com/rubezh-ai/rubezh-api/internal/storage"
@@ -272,7 +273,7 @@ func createChatSessionHandler(store *storage.Storage) http.HandlerFunc {
 // ошибки потока — SSE-событие error через sink оркестратора.
 func chatHandler(
 	orch chatOrchestrator, store *storage.Storage,
-	llmRouter *llm.Router, logger *slog.Logger,
+	llmRouter *llm.Router, cipher *crypto.Cipher, logger *slog.Logger,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		role, _ := auth.RoleFromContext(r.Context())
@@ -305,6 +306,11 @@ func chatHandler(
 		}
 
 		chatReq := buildChatRequest(role, userID, dto, provider, session)
+		// L: персональный ключ пользователя к провайдеру (если подключён) —
+		// используется вместо org-ключа; иначе org-ключ (fail-closed на ошибке).
+		if key := resolveUserKey(r.Context(), store, cipher, userID, provider.ID); key != "" {
+			chatReq.APIKeyOverride = key
+		}
 
 		// Подготовка — может вернуть ошибку ДО открытия SSE. Тогда отдаём
 		// HTTP-код (без SSE-заголовков); chat_error уже записан внутри.

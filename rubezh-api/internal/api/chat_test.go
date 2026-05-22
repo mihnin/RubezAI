@@ -95,7 +95,7 @@ func chatTestHandler(
 	orch chatOrchestrator, store *storage.Storage, router *llm.Router,
 ) http.Handler {
 	return auth.Middleware(apiTestSecret)(
-		chatHandler(orch, store, router, discardLogger()))
+		chatHandler(orch, store, router, nil, discardLogger()))
 }
 
 func TestChatHandlerStreamsEvents(t *testing.T) {
