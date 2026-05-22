@@ -5,16 +5,19 @@ import {
   ShieldAlert,
   Sparkles,
   AlertCircle,
-  ChevronDown,
   Eye,
 } from "lucide-react";
 import { streamChat } from "../api/sse";
 import { apiFetch } from "../api/client";
+import { CloudGate } from "../components/CloudGate";
+import { ProviderModelPicker } from "../components/ProviderModelPicker";
 import {
   ModelListSchema,
   ChatSessionSchema,
   RevealSchema,
+  ChatPreviewSchema,
   type ChatEvent,
+  type ChatPreview,
   type Model,
 } from "../api/schemas";
 
@@ -40,6 +43,9 @@ export default function ChatPage() {
   const [sessionId, setSessionId] = useState<string>("");
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Гейт предпросмотра перед отправкой в облако (J.1) и индикатор обработки.
+  const [gate, setGate] = useState<(ChatPreview & { input: string }) | null>(null);
+  const [previewing, setPreviewing] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -88,42 +94,64 @@ export default function ChatPage() {
   useEffect(() => () => abortRef.current?.abort(), []);
 
   async function send() {
-    if (!input.trim() || streaming) return;
+    if (!input.trim() || streaming || previewing) return;
     if (!activeProvider) {
       setError(
         "Нет активных LLM-провайдеров. Откройте «Модели» и создайте провайдера.",
       );
       return;
     }
-    const userMsg: Message = { role: "user", content: input };
-    setMessages((m) => [...m, userMsg, { role: "assistant", content: "" }]);
+    const text = input;
+    // Облачная модель (external) → гейт предпросмотра: показываем обезличенный
+    // текст и просим подтвердить (данные выходят за контур). Локальная
+    // (trusted_local) → сразу, raw остаётся в периметре.
+    if (activeProvider.trust_level === "external") {
+      setError(null);
+      setPreviewing(true);
+      try {
+        const data = await apiFetch("/api/chat/preview", ChatPreviewSchema, {
+          method: "POST",
+          body: JSON.stringify({ text, provider: activeProvider.name }),
+        });
+        setGate({ ...data, input: text });
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "ошибка обезличивания");
+      } finally {
+        setPreviewing(false);
+      }
+      return;
+    }
     setInput("");
+    await doSend(text, "");
+  }
+
+  // doSend — фактический стрим в LLM. previewToken (для cloud) гарантирует,
+  // что отправлен ровно подтверждённый обезличенный текст (J.0).
+  async function doSend(text: string, previewToken: string) {
+    const userMsg: Message = { role: "user", content: text };
+    setMessages((m) => [...m, userMsg, { role: "assistant", content: "" }]);
     setStreaming(true);
     setError(null);
 
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     try {
-      // Lazy-создание сессии при первом сообщении — backend ожидает
-      // существующую запись в chat_sessions (FK), локальный UUID не годится.
       let sid = sessionId;
       if (!sid) {
         const created = await apiFetch(
           "/api/chat/sessions",
           ChatSessionSchema,
-          {
-            method: "POST",
-            body: JSON.stringify({ title: "web-ui" }),
-          },
+          { method: "POST", body: JSON.stringify({ title: "web-ui" }) },
         );
         sid = created.id;
         setSessionId(sid);
       }
       await streamChat({
         sessionId: sid,
-        message: userMsg.content,
-        provider: activeProvider.name,
-        model: modelName || activeProvider.name,
+        message: text,
+        provider: activeProvider!.name,
+        model: modelName || activeProvider!.name,
+        previewToken,
         signal: ctrl.signal,
         onEvent: (ev) => applyEvent(ev, setMessages, setError),
       });
@@ -225,6 +253,28 @@ export default function ChatPage() {
           {error}
         </div>
       )}
+      {previewing && (
+        <div
+          aria-live="polite"
+          className="border-t border-slate-800 px-4 py-2.5 text-sm text-cyan-300 flex items-center gap-2 bg-slate-900/40"
+        >
+          <Sparkles className="w-4 h-4 animate-spin" strokeWidth={2} />
+          Обрабатываем персональные данные…
+        </div>
+      )}
+      {gate && (
+        <CloudGate
+          gate={gate}
+          provider={providerName}
+          onCancel={() => setGate(null)}
+          onConfirm={() => {
+            const g = gate;
+            setGate(null);
+            setInput("");
+            doSend(g.input, g.preview_token);
+          }}
+        />
+      )}
       <footer className="border-t border-slate-800 p-4 bg-slate-950">
         <div className="flex gap-2 max-w-4xl mx-auto">
           <textarea
@@ -268,94 +318,6 @@ function defaultModelFor(p: Model): string {
     : p.name;
 }
 
-interface PickerProps {
-  providers: Model[];
-  providerName: string;
-  modelName: string;
-  onProviderChange: (p: Model) => void;
-  onModelChange: (m: string) => void;
-}
-
-function ProviderModelPicker({
-  providers,
-  providerName,
-  modelName,
-  onProviderChange,
-  onModelChange,
-}: PickerProps) {
-  const [open, setOpen] = useState(false);
-  const active = providers.find((p) => p.name === providerName);
-  if (!active) {
-    return (
-      <div className="text-xs text-amber-400">нет активных провайдеров</div>
-    );
-  }
-  return (
-    <div className="relative">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-2 text-xs bg-slate-900/60 border border-slate-800 rounded-full px-3 py-1.5 hover:border-slate-700 transition"
-      >
-        <Sparkles className="w-3.5 h-3.5 text-cyan-400" strokeWidth={2} />
-        <span className="text-slate-200 font-medium">{active.name}</span>
-        <span className="text-slate-600">·</span>
-        <span className="text-slate-500 font-mono max-w-[180px] truncate">
-          {modelName}
-        </span>
-        <ChevronDown
-          className={`w-3 h-3 text-slate-500 transition-transform ${open ? "rotate-180" : ""}`}
-          strokeWidth={2.5}
-        />
-      </button>
-      {open && (
-        <div className="absolute right-0 mt-2 w-[360px] bg-slate-900 border border-slate-700 rounded-xl p-3 shadow-2xl z-10">
-          <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-1.5">
-            Провайдер
-          </div>
-          <div className="space-y-1 mb-3">
-            {providers.map((p) => (
-              <button
-                key={p.id}
-                onClick={() => {
-                  onProviderChange(p);
-                  setOpen(false);
-                }}
-                className={`w-full text-left px-2.5 py-1.5 rounded text-xs ${
-                  p.name === providerName
-                    ? "bg-cyan-500/15 text-cyan-300"
-                    : "hover:bg-slate-800/60 text-slate-300"
-                }`}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-medium">{p.name}</span>
-                  <span className="text-[10px] text-slate-500">
-                    {p.trust_level}
-                  </span>
-                </div>
-                <div className="font-mono text-[10px] text-slate-600 truncate">
-                  {p.endpoint}
-                </div>
-              </button>
-            ))}
-          </div>
-          <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-1.5">
-            Модель
-          </div>
-          <input
-            value={modelName}
-            onChange={(e) => onModelChange(e.target.value)}
-            placeholder="например: deepseek-r1-distill-qwen-7b"
-            className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs font-mono focus:outline-none focus:border-cyan-500"
-          />
-          <p className="text-[10px] text-slate-500 mt-1.5 leading-relaxed">
-            Имя модели передаётся как поле <code>model</code> в OpenAI-
-            совместимый endpoint провайдера. Сохраняется в&nbsp;localStorage.
-          </p>
-        </div>
-      )}
-    </div>
-  );
-}
 
 function applyEvent(
   ev: ChatEvent,

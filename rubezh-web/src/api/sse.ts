@@ -26,6 +26,7 @@ export interface ChatStreamOptions {
   message: string;
   provider: string;
   model: string;
+  previewToken?: string; // токен подтверждённого предпросмотра (J.0)
   onEvent: (event: ChatEvent) => void;
   signal?: AbortSignal;
 }
@@ -38,6 +39,7 @@ export async function streamChat(opts: ChatStreamOptions): Promise<void> {
     model: opts.model,
   };
   if (opts.sessionId) body.session_id = opts.sessionId;
+  if (opts.previewToken) body.preview_token = opts.previewToken;
 
   const resp = await fetch("/api/chat", {
     method: "POST",

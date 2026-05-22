@@ -369,14 +369,10 @@ func previewChatHandler(
 			http.Error(w, cerr.message, cerr.code)
 			return
 		}
-		// Сессия нужна для привязки кэша; создаём, если не передана.
-		session, cerr := resolveSession(r.Context(), store, userID, nil)
-		if cerr != nil {
-			http.Error(w, cerr.message, cerr.code)
-			return
-		}
+		// Предпросмотр сессию НЕ создаёт (не плодим пустых «сирот»): токен в
+		// кэше привязан к userID, sessionID не проверяется при consume.
 		req := chat.Request{
-			RequestID: newRequestID(), SessionID: session.ID, UserID: userID,
+			RequestID: newRequestID(), UserID: userID,
 			UserRole: string(role), Message: dto.Text,
 			Provider: provider.Name, ProviderID: provider.ID,
 			ModelTrust: provider.TrustLevel,

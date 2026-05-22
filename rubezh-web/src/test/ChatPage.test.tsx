@@ -103,6 +103,24 @@ describe("ChatPage — reveal реальных данных (J.2)", () => {
             }),
           );
         }
+        if (url.endsWith("/api/chat/preview") && method === "POST") {
+          return Promise.resolve(
+            jsonResponse({
+              preview_token: "tok-1",
+              sanitized_text: "обезличенный запрос ФИО_001",
+              entities: [
+                {
+                  type: "PERSON",
+                  category: "pii",
+                  pseudonym: "ФИО_001",
+                  confidence: 0.9,
+                  detector: "regex",
+                },
+              ],
+              risk: { level: "high", score: 0.8, classes: ["pii"] },
+            }),
+          );
+        }
         if (url.endsWith("/api/chat") && method === "POST") {
           return Promise.resolve(sseResponse(sse));
         }
@@ -122,6 +140,12 @@ describe("ChatPage — reveal реальных данных (J.2)", () => {
       target: { value: "тест" },
     });
     fireEvent.keyDown(screen.getByLabelText("Сообщение"), { key: "Enter" });
+
+    // облачная модель → гейт предпросмотра; подтверждаем отправку
+    const sendCloud = await screen.findByRole("button", {
+      name: /Отправить в облако/i,
+    });
+    fireEvent.click(sendCloud);
 
     // ответ пришёл с псевдонимами + появилась кнопка reveal
     await screen.findByText("Ответ про ФИО_001");

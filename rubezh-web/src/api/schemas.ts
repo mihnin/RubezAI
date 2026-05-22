@@ -43,6 +43,27 @@ export const RevealSchema = z.object({
   revealed_text: z.string(),
 });
 
+// Ответ POST /api/chat/preview (J.1): обезличенный текст + сущности + риск.
+export const ChatPreviewSchema = z.object({
+  preview_token: z.string(),
+  sanitized_text: z.string(),
+  entities: z.array(
+    z.object({
+      type: z.string(),
+      category: z.string(),
+      pseudonym: z.string(),
+      confidence: z.number(),
+      detector: z.string(),
+    }),
+  ),
+  risk: z.object({
+    level: z.string(),
+    score: z.number(),
+    classes: z.array(z.string()),
+  }),
+});
+export type ChatPreview = z.infer<typeof ChatPreviewSchema>;
+
 export const ChatErrorPayloadSchema = z.object({
   message: z.string(),
   request_id: z.string(),
