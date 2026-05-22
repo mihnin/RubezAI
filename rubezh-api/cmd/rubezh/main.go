@@ -328,7 +328,7 @@ func dispatchSSE(name, data string) {
 func (c *cli) cmdModels(args []string) error {
 	if len(args) == 0 {
 		return errors.New(
-			"usage: rubezh models list | set-key NAME --key K | enable NAME | disable NAME")
+			"usage: rubezh models list | set-key NAME --key K | enable NAME | disable NAME | enable-all")
 	}
 	switch args[0] {
 	case "list":
@@ -337,9 +337,38 @@ func (c *cli) cmdModels(args []string) error {
 		return c.modelsSetKey(args[1:])
 	case "enable", "disable":
 		return c.modelsToggle(args[0], args[1:])
+	case "enable-all":
+		return c.modelsEnableAll()
 	default:
 		return fmt.Errorf("неизвестная подкоманда: %s", args[0])
 	}
+}
+
+// modelsEnableAll включает все облачные (external) провайдеры разом.
+func (c *cli) modelsEnableAll() error {
+	var ml []struct {
+		ID         string `json:"id"`
+		Name       string `json:"name"`
+		TrustLevel string `json:"trust_level"`
+		IsEnabled  bool   `json:"is_enabled"`
+	}
+	if err := c.getJSON("/api/models", &ml); err != nil {
+		return err
+	}
+	n := 0
+	for _, p := range ml {
+		if p.TrustLevel != "external" || p.IsEnabled {
+			continue
+		}
+		body, _ := json.Marshal(map[string]bool{"is_enabled": true})
+		if err := c.sendJSON("PATCH", "/api/models/"+p.ID, body); err != nil {
+			return fmt.Errorf("включение %s: %w", p.Name, err)
+		}
+		fmt.Printf("✓ включён %s\n", p.Name)
+		n++
+	}
+	fmt.Printf("включено облачных провайдеров: %d (не забудьте задать ключи)\n", n)
+	return nil
 }
 
 // modelsToggle включает/выключает провайдера (PATCH /api/models/:id).

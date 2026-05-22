@@ -23,6 +23,9 @@ function modelSuggestions(providerName: string): string[] {
   if (n.includes("grok") || n.includes("xai")) {
     return ["grok-2-latest"];
   }
+  if (n.includes("qwen")) {
+    return ["qwen-max", "qwen-plus", "qwen-turbo"];
+  }
   return [];
 }
 
