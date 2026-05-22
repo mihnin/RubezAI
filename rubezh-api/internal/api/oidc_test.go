@@ -10,6 +10,28 @@ func oidcWithMap(roleClaim string, m map[string]string) *OIDCAuth {
 	return &OIDCAuth{cfg: config.OIDCConfig{RoleClaim: roleClaim, RoleMap: m}}
 }
 
+func TestIsLoopbackURL(t *testing.T) {
+	ok := []string{
+		"http://127.0.0.1:8123/callback", "http://localhost:5000/cb",
+		"http://[::1]:9000/x",
+	}
+	for _, u := range ok {
+		if !isLoopbackURL(u) {
+			t.Errorf("%q должен считаться loopback", u)
+		}
+	}
+	bad := []string{
+		"", "http://evil.com/cb", "https://attacker.example/steal",
+		"http://127.0.0.1.evil.com/", "ftp://127.0.0.1/", "javascript:alert(1)",
+		"http://169.254.169.254/", "//127.0.0.1",
+	}
+	for _, u := range bad {
+		if isLoopbackURL(u) {
+			t.Errorf("%q НЕ должен считаться loopback (защита от увода токена)", u)
+		}
+	}
+}
+
 func TestMapRoleFromGroupsClaim(t *testing.T) {
 	o := oidcWithMap("groups", map[string]string{
 		"rubezh-admins": "admin", "rubezh-ib": "security_officer",

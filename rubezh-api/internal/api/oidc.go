@@ -65,6 +65,11 @@ func (o *OIDCAuth) login(w http.ResponseWriter, r *http.Request) {
 	o.setCookie(w, "oidc_state", state, secure)
 	o.setCookie(w, "oidc_nonce", nonce, secure)
 	o.setCookie(w, "oidc_verifier", verifier, secure)
+	// K.2: CLI loopback-вход. cli_redirect разрешён ТОЛЬКО на loopback —
+	// иначе токен можно было бы увести на чужой URL (open-redirect).
+	if cli := r.URL.Query().Get("cli_redirect"); isLoopbackURL(cli) {
+		o.setCookie(w, "oidc_cli_redirect", cli, secure)
+	}
 	authURL := o.oauth.AuthCodeURL(state,
 		oidc.Nonce(nonce), oauth2.S256ChallengeOption(verifier))
 	http.Redirect(w, r, authURL, http.StatusFound)
@@ -132,10 +137,34 @@ func (o *OIDCAuth) callback(w http.ResponseWriter, r *http.Request) {
 	token := auth.IssueTokenForUser(userID, auth.Role(roleCode), o.secret)
 	o.logger.Info("oidc: вход выполнен", "role", roleCode) // без email/токена
 
-	// Возврат на фронт: токен во фрагменте URL (не попадает в логи/Referer).
+	// K.2: CLI loopback — токен в query на 127.0.0.1 (fragment не доходит до
+	// HTTP-сервера CLI). Иначе — web: токен во фрагменте (не в логах/Referer).
+	if c, err := r.Cookie("oidc_cli_redirect"); err == nil && isLoopbackURL(c.Value) {
+		target := c.Value + "?token=" + url.QueryEscape(token) +
+			"&role=" + url.QueryEscape(roleCode)
+		http.Redirect(w, r, target, http.StatusFound)
+		return
+	}
 	target := strings.TrimRight(o.cfg.FrontendURL, "/") + "/login#token=" +
 		url.QueryEscape(token) + "&role=" + url.QueryEscape(roleCode)
 	http.Redirect(w, r, target, http.StatusFound)
+}
+
+// isLoopbackURL — true только для http(s)://127.0.0.1|localhost|[::1][:port][/path].
+// Защита от увода токена: cli_redirect обязан указывать на loopback.
+func isLoopbackURL(raw string) bool {
+	if raw == "" {
+		return false
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return false
+	}
+	switch u.Hostname() {
+	case "127.0.0.1", "localhost", "::1":
+		return true
+	}
+	return false
 }
 
 // mapRole отображает значение claim'а роли на код роли проекта; least-privilege.
@@ -169,6 +198,11 @@ func claimValues(v any) []string {
 }
 
 func (o *OIDCAuth) fail(w http.ResponseWriter, r *http.Request, msg string) {
+	if c, err := r.Cookie("oidc_cli_redirect"); err == nil && isLoopbackURL(c.Value) {
+		http.Redirect(w, r, c.Value+"?error="+url.QueryEscape(msg),
+			http.StatusFound)
+		return
+	}
 	target := strings.TrimRight(o.cfg.FrontendURL, "/") +
 		"/login#error=" + url.QueryEscape(msg)
 	http.Redirect(w, r, target, http.StatusFound)

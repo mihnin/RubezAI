@@ -2,7 +2,8 @@
 //
 // Использование (примеры):
 //
-//	rubezh login --role user                    # сохранить токен в ~/.rubezh/token
+//	rubezh login --role user                    # dev-вход (сохранить токен)
+//	rubezh login --sso                          # вход через браузер (OIDC, K.2)
 //	rubezh chat --provider deepseek-cloud --model deepseek-chat "Привет"
 //	rubezh models list
 //	rubezh models set-key NAME --key sk-...
@@ -18,16 +19,20 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -105,7 +110,11 @@ func main() {
 func (c *cli) cmdLogin(args []string) error {
 	fs := flag.NewFlagSet("login", flag.ExitOnError)
 	role := fs.String("role", "user", "роль (user|security_officer|admin|...)")
+	sso := fs.Bool("sso", false, "вход через браузер (OIDC, корп. учётка)")
 	_ = fs.Parse(args)
+	if *sso {
+		return c.cmdLoginSSO()
+	}
 	body, _ := json.Marshal(map[string]string{"role": *role})
 	resp, err := http.Post(
 		c.api+"/api/auth/dev-login", "application/json", bytes.NewReader(body))
@@ -133,6 +142,78 @@ func (c *cli) cmdLogin(args []string) error {
 		lr.Role, lr.UserID[:8], lr.ExpiresAt)
 	fmt.Printf("  токен сохранён в ~/%s\n", tokenFile)
 	return nil
+}
+
+// cmdLoginSSO — браузерный OIDC-вход (K.2, RFC 8252 loopback). Поднимает
+// локальный сервер на 127.0.0.1:<rand>, открывает браузер на login-эндпойнте
+// «Рубежа» с cli_redirect на этот loopback, ждёт токен и сохраняет его.
+func (c *cli) cmdLoginSSO() error {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return fmt.Errorf("loopback listen: %w", err)
+	}
+	defer ln.Close()
+	redirect := fmt.Sprintf("http://%s/callback", ln.Addr().String())
+
+	type result struct {
+		token, role, errMsg string
+	}
+	done := make(chan result, 1)
+	srv := &http.Server{Handler: http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/callback" {
+				http.NotFound(w, r)
+				return
+			}
+			q := r.URL.Query()
+			res := result{token: q.Get("token"), role: q.Get("role"), errMsg: q.Get("error")}
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			if res.token != "" {
+				_, _ = w.Write([]byte(
+					"<h3>Вход выполнен. Можно закрыть вкладку и вернуться в терминал.</h3>"))
+			} else {
+				_, _ = w.Write([]byte("<h3>Ошибка входа: " + res.errMsg + "</h3>"))
+			}
+			done <- res
+		})}
+	go func() { _ = srv.Serve(ln) }()
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	}()
+
+	loginURL := c.api + "/api/auth/oidc/login?cli_redirect=" + url.QueryEscape(redirect)
+	fmt.Println("Открываю браузер для входа…")
+	fmt.Println("Если не открылось — перейдите вручную:\n  " + loginURL)
+	_ = openBrowser(loginURL)
+
+	select {
+	case res := <-done:
+		if res.token == "" {
+			return fmt.Errorf("вход не выполнен: %s", res.errMsg)
+		}
+		if err := saveToken(res.token); err != nil {
+			return err
+		}
+		fmt.Printf("✓ вход выполнен (роль %s); токен сохранён в ~/%s\n",
+			res.role, tokenFile)
+		return nil
+	case <-time.After(3 * time.Minute):
+		return errors.New("таймаут ожидания входа (3 мин)")
+	}
+}
+
+// openBrowser открывает URL в браузере ОС (кроссплатформенно).
+func openBrowser(rawURL string) error {
+	switch runtime.GOOS {
+	case "windows":
+		return exec.Command("rundll32", "url.dll,FileProtocolHandler", rawURL).Start()
+	case "darwin":
+		return exec.Command("open", rawURL).Start()
+	default:
+		return exec.Command("xdg-open", rawURL).Start()
+	}
 }
 
 // ─── chat (SSE) ──────────────────────────────────────────────────────────
