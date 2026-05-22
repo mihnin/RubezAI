@@ -29,6 +29,6 @@ enablePasswordDB: true
 # Тестовый сотрудник. Пароль: "password" (bcrypt-хеш ниже).
 staticPasswords:
   - email: "ivanov@corp.example"
-    hash: "$2a$10$2b2cu8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+    hash: "$2y$10$ghoDXQNdSraLWIlivwoF3uN/JY9F49kgZbP5btl4cA.Gkpq3mbcI6"
     username: "ivanov"
     userID: "08a8684b-db88-4b73-90a9-3cd1661f5466"
