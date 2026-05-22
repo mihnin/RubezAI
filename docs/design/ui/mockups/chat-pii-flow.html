@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Рубеж ИИ — макеты: чат с ПДн (Итерация J)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background:#020617; color:#e2e8f0; font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif; }
+  .panel { background:rgba(15,23,42,.6); border:1px solid #1e293b; border-radius:.9rem; }
+  .accent { color:#22d3ee; }
+  .btn { background:#06b6d4; color:#020617; font-weight:600; border-radius:.6rem; box-shadow:0 10px 25px -5px rgba(34,211,238,.25); }
+  .chip { font-size:.7rem; padding:.1rem .55rem; border-radius:9999px; display:inline-flex; align-items:center; gap:.25rem; }
+  kbd{ font-family: ui-monospace, monospace; }
+</style>
+</head>
+<body class="p-6 md:p-10">
+  <header class="max-w-5xl mx-auto mb-8">
+    <h1 class="text-2xl font-semibold tracking-tight">Рубеж ИИ — макеты UX</h1>
+    <p class="text-sm text-slate-500 mt-1">Итерация J: чат с документами и контролируемый вывод ПДн за контур. Тёмная enterprise-тема, акцент cyan. Прототип (HTML), не интерактивный.</p>
+  </header>
+
+  <main class="max-w-5xl mx-auto space-y-12">
+
+  <!-- ЭКРАН 1 -->
+  <section>
+    <h2 class="text-xs uppercase tracking-widest text-slate-500 mb-3">1 · Чат — picker (cloud/local) + attach</h2>
+    <div class="panel overflow-hidden">
+      <div class="flex items-center justify-between px-5 py-3 border-b border-slate-800">
+        <div>
+          <div class="font-semibold">Чат</div>
+          <div class="text-xs text-slate-500">Сессия <span class="font-mono text-slate-400">a1b2c3d4</span></div>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="chip bg-amber-500/15 text-amber-300">⚠ облачная — данные за контур</span>
+          <button class="text-xs panel px-3 py-1.5 inline-flex items-center gap-2">
+            <span class="accent">◇</span><span class="font-medium">deepseek-cloud</span>
+            <span class="text-slate-600">·</span><span class="font-mono text-slate-500">deepseek-chat</span> ▾
+          </button>
+        </div>
+      </div>
+      <div class="px-5 py-10 text-center text-slate-500 text-sm">Задайте вопрос или приложите документ — ПДн будут обезличены перед отправкой.</div>
+      <div class="px-5 py-4 border-t border-slate-800">
+        <div class="flex gap-2">
+          <button class="px-3 panel text-slate-300" title="Прикрепить документ">📎</button>
+          <textarea rows="2" placeholder="Введите сообщение…" class="flex-1 bg-slate-800 border border-slate-700 rounded-lg p-3 text-sm resize-none"></textarea>
+          <button class="btn px-4">➤</button>
+        </div>
+        <div class="mt-2 text-xs panel inline-flex items-center gap-2 px-3 py-1.5">
+          📎 Договор_тест_ПДн.docx <span class="text-emerald-300">✓ обработан · 12 ПДн</span> <span class="text-slate-500 cursor-pointer">✕</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- picker dropdown -->
+    <div class="panel mt-3 w-[380px] p-3 text-sm">
+      <div class="text-[10px] uppercase tracking-wider text-amber-300/80 mb-1">Облачные · ⚠ данные уходят за контур</div>
+      <div class="space-y-1 mb-2">
+        <div class="px-2.5 py-1.5 rounded bg-cyan-500/15 text-cyan-300 flex justify-between"><span>● deepseek-cloud</span><span class="text-[10px] text-slate-400">external</span></div>
+        <div class="px-2.5 py-1.5 rounded hover:bg-slate-800/60 flex justify-between text-slate-300"><span>○ openai-gpt</span><span class="text-[10px] text-slate-500">external</span></div>
+        <div class="px-2.5 py-1.5 rounded hover:bg-slate-800/60 flex justify-between text-slate-300"><span>○ anthropic-claude</span><span class="text-[10px] text-slate-500">external</span></div>
+      </div>
+      <div class="text-[10px] uppercase tracking-wider text-emerald-300/80 mb-1">Локальные · 🛡 в периметре, raw</div>
+      <div class="px-2.5 py-1.5 text-slate-500 text-xs mb-2">нет включённых</div>
+      <div class="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Модель</div>
+      <input value="deepseek-chat" class="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs font-mono" />
+    </div>
+  </section>
+
+  <!-- ЭКРАН 2 -->
+  <section>
+    <h2 class="text-xs uppercase tracking-widest text-slate-500 mb-3">2 · Гейт перед отправкой в облако</h2>
+    <div class="panel p-6 max-w-2xl">
+      <div class="flex items-start gap-3 mb-4">
+        <span class="text-amber-400 text-xl">⚠</span>
+        <div>
+          <div class="font-semibold">Данные уйдут за контур предприятия</div>
+          <div class="text-sm text-slate-400">Провайдер <span class="font-mono">deepseek-cloud</span> (облако). Проверьте обезличенный текст перед отправкой.</div>
+        </div>
+      </div>
+      <div class="text-[11px] uppercase tracking-wider text-slate-500 mb-1">Обезличенный текст (уйдёт в LLM)</div>
+      <div class="bg-slate-800/70 border border-slate-700 rounded-lg p-3 text-sm font-mono leading-relaxed mb-4">
+        Заказчик <span class="text-cyan-300">ФИО_001</span>, паспорт <span class="text-cyan-300">ПАСПОРТ_001</span>,
+        карта <span class="text-cyan-300">КАРТА_001</span>, тел. <span class="text-cyan-300">ТЕЛЕФОН_001</span>, СНИЛС <span class="text-cyan-300">СНИЛС_001</span>.
+      </div>
+      <div class="flex items-center gap-3 mb-1 text-sm">
+        <span class="text-slate-400">Найдено и заменено:</span><span class="font-semibold">12</span>
+        <span class="chip bg-red-500/20 text-red-300">● critical</span>
+      </div>
+      <div class="text-xs text-slate-400 mb-5">PERSON 3 · PASSPORT 1 · BANK_CARD 1 · SNILS 1 · INN 2 · PHONE 3 · EMAIL 1 &nbsp;|&nbsp; классы: <span class="text-cyan-300">pii</span> · <span class="text-amber-300">secret</span></div>
+      <div class="flex justify-end gap-2">
+        <button class="px-3 py-1.5 text-sm text-slate-400">Отмена</button>
+        <button class="btn px-3 py-1.5 text-sm">➤ Отправить в облако</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ЭКРАН 3 -->
+  <section>
+    <h2 class="text-xs uppercase tracking-widest text-slate-500 mb-3">3 · Ответ ассистента — псевдонимы + reveal</h2>
+    <div class="space-y-3 max-w-2xl">
+      <div class="panel p-4">
+        <div class="text-sm">🤖 Договор с <span class="text-cyan-300 font-mono">ФИО_001</span> на сумму <span class="text-cyan-300 font-mono">СУММА_001</span> подписан. Реквизиты карты <span class="text-cyan-300 font-mono">КАРТА_001</span> приняты.</div>
+        <div class="flex items-center justify-between mt-3">
+          <span class="text-xs text-slate-500">allow_masked · deepseek-cloud</span>
+          <button class="text-xs panel px-2.5 py-1 inline-flex items-center gap-1 accent">👁 Показать реальные данные</button>
+        </div>
+      </div>
+      <div class="text-center text-slate-600 text-xs">↓ после клика</div>
+      <div class="panel p-4 border-emerald-700/40">
+        <div class="text-sm">🤖 Договор с <span class="text-emerald-200">Соколовой Екатериной Дмитриевной</span> на сумму <span class="text-emerald-200">185 000 ₽</span> подписан. Реквизиты карты <span class="text-emerald-200">2202 2012 3344 5566</span> приняты.</div>
+        <div class="flex items-center justify-between mt-3">
+          <span class="text-xs text-slate-500">allow_masked · deepseek-cloud</span>
+          <span class="chip bg-emerald-500/15 text-emerald-300">🔓 раскрыто (вами, 14:05) · в аудите</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ЭКРАН 4 -->
+  <section>
+    <h2 class="text-xs uppercase tracking-widest text-slate-500 mb-3">4 · Индикатор обработки ПДн</h2>
+    <div class="panel p-4 max-w-md flex items-center gap-3">
+      <span class="accent animate-spin inline-block">⟳</span>
+      <div>
+        <div class="text-sm">Обрабатываем персональные данные…</div>
+        <div class="text-xs text-slate-500">Детекторы + локальная LLM-проверка перед выходом за контур</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ЭКРАН 5 -->
+  <section>
+    <h2 class="text-xs uppercase tracking-widest text-slate-500 mb-3">5 · Документы — статистика и выгрузки</h2>
+    <div class="panel p-5 max-w-3xl">
+      <div class="flex items-start justify-between">
+        <div>
+          <div class="font-medium">📄 Договор_тест_ПДн.docx</div>
+          <div class="text-xs text-slate-500 mt-0.5">✓ done · 03.06.2026</div>
+        </div>
+        <span class="chip bg-red-500/20 text-red-300">● critical</span>
+      </div>
+      <div class="text-xs text-slate-400 mt-3">12 ПДн: PERSON 3 · PASSPORT 1 · BANK_CARD 1 · SNILS 1 · INN 2 · PHONE 3 · EMAIL 1</div>
+      <div class="mt-4 flex gap-2 flex-wrap">
+        <button class="text-xs panel px-3 py-1.5">⬇ Оригинал</button>
+        <button class="text-xs panel px-3 py-1.5">⬇ Обезличенный (.txt)</button>
+        <button class="text-xs panel px-3 py-1.5 accent">🔎 Маппинги / история</button>
+      </div>
+    </div>
+  </section>
+
+  </main>
+  <footer class="max-w-5xl mx-auto mt-12 text-xs text-slate-600">Прототип под docs/design/chat-pii-flow.md. Визуальная доводка — в Stitch после перезапуска CC.</footer>
+</body>
+</html>
