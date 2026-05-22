@@ -5,7 +5,20 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"strings"
 )
+
+// parseRoleMap разбирает OIDC_ROLE_MAP вида "claimval:role,val2:role2" в map.
+func parseRoleMap(raw string) map[string]string {
+	m := map[string]string{}
+	for _, pair := range strings.Split(raw, ",") {
+		k, v, ok := strings.Cut(strings.TrimSpace(pair), ":")
+		if ok && k != "" && v != "" {
+			m[strings.TrimSpace(k)] = strings.TrimSpace(v)
+		}
+	}
+	return m
+}
 
 // Config — конфигурация сервиса rubezh-api.
 type Config struct {
@@ -21,6 +34,25 @@ type Config struct {
 	MinioSecretKey       string
 	MinioBucket          string
 	MinioSecure          bool
+	OIDC                 OIDCConfig
+}
+
+// OIDCConfig — параметры OIDC Relying Party (K.1). Пустой Issuer/ClientID/
+// ClientSecret → OIDC выключен, остаётся dev-login.
+type OIDCConfig struct {
+	Issuer       string
+	ClientID     string
+	ClientSecret string
+	RedirectURL  string            // callback rubezh-api, напр. http://localhost:8080/api/auth/oidc/callback
+	FrontendURL  string            // куда вернуть пользователя с токеном, напр. http://localhost:5173
+	RoleClaim    string            // claim с ролью/группой (напр. "groups"); пусто → все user
+	RoleMap      map[string]string // значение claim → код роли проекта
+}
+
+// Enabled — сконфигурирован ли OIDC (все обязательные поля заданы).
+func (o OIDCConfig) Enabled() bool {
+	return o.Issuer != "" && o.ClientID != "" && o.ClientSecret != "" &&
+		o.RedirectURL != ""
 }
 
 // Load читает конфигурацию из переменных окружения, подставляя значения по
@@ -43,6 +75,15 @@ func Load() (Config, error) {
 		MinioSecretKey:       os.Getenv("MINIO_ROOT_PASSWORD"),
 		MinioBucket:          getEnv("MINIO_BUCKET", "rubezh-documents"),
 		MinioSecure:          os.Getenv("MINIO_SECURE") == "true",
+		OIDC: OIDCConfig{
+			Issuer:       os.Getenv("OIDC_ISSUER"),
+			ClientID:     os.Getenv("OIDC_CLIENT_ID"),
+			ClientSecret: os.Getenv("OIDC_CLIENT_SECRET"),
+			RedirectURL:  os.Getenv("OIDC_REDIRECT_URL"),
+			FrontendURL:  getEnv("OIDC_FRONTEND_URL", "http://localhost:5173"),
+			RoleClaim:    os.Getenv("OIDC_ROLE_CLAIM"),
+			RoleMap:      parseRoleMap(os.Getenv("OIDC_ROLE_MAP")),
+		},
 	}
 	if cfg.AuthSecret == "" {
 		return Config{}, fmt.Errorf("config: переменная AUTH_DEV_TOKEN_SECRET обязательна")

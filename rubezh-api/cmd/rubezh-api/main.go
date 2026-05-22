@@ -94,6 +94,20 @@ func main() {
 		minioClient = mc
 	}
 
+	// OIDC RP (K.1) — опционально; ошибка построения не валит сервис
+	// (остаётся dev-login), но логируется.
+	var oidcAuth *api.OIDCAuth
+	if cfg.OIDC.Enabled() {
+		oa, oerr := api.NewOIDCAuth(ctx, cfg.OIDC, store, cfg.AuthSecret, logger)
+		if oerr != nil {
+			logger.Error("OIDC не инициализирован (остаётся dev-login)",
+				"issuer", cfg.OIDC.Issuer, "error", oerr)
+		} else {
+			oidcAuth = oa
+			logger.Info("OIDC RP включён", "issuer", cfg.OIDC.Issuer)
+		}
+	}
+
 	handler, orchestrator := api.NewRouter(api.Deps{
 		Logger:        logger,
 		Store:         store,
@@ -103,6 +117,7 @@ func main() {
 		MappingCipher: mappingCipher,
 		Minio:         minioClient,
 		ReloadRouter:  reloadRouter,
+		OIDC:          oidcAuth,
 	})
 	srv := &http.Server{
 		Addr:              ":" + cfg.HTTPPort,

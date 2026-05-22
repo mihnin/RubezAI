@@ -17,6 +17,7 @@ interface AuthContextValue {
   token: string | null;
   user: AuthUser | null;
   login(role: string): Promise<void>;
+  loginWithToken(token: string, role: string): void;
   logout(): void;
 }
 
@@ -67,6 +68,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem(STORAGE_USER, JSON.stringify(nextUser));
   }, []);
 
+  // loginWithToken — приём готового токена из OIDC-callback (K.1). user_id
+  // несётся внутри токена (сервер берёт его оттуда); на клиенте храним роль и
+  // клиентский срок для авто-логаута.
+  const loginWithToken = useCallback((tok: string, role: string) => {
+    const nextUser: AuthUser = {
+      role,
+      user_id: "",
+      expires_at: new Date(Date.now() + 12 * 3600 * 1000).toISOString(),
+    };
+    setToken(tok);
+    setUser(nextUser);
+    localStorage.setItem(STORAGE_TOKEN, tok);
+    localStorage.setItem(STORAGE_USER, JSON.stringify(nextUser));
+  }, []);
+
   const logout = useCallback(() => {
     setToken(null);
     setUser(null);
@@ -75,7 +91,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <Ctx.Provider value={{ token, user, login, logout }}>{children}</Ctx.Provider>
+    <Ctx.Provider value={{ token, user, login, loginWithToken, logout }}>
+      {children}
+    </Ctx.Provider>
   );
 }
 

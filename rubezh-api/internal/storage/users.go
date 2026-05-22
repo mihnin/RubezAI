@@ -32,3 +32,32 @@ func (s *Storage) UserIDForRole(ctx context.Context, role string) (string, error
 	}
 	return id, nil
 }
+
+// UpsertUserByEmail создаёт или обновляет пользователя по email (OIDC, K.1).
+// Привязывает роль по коду (roleCode), email/full_name берутся из OIDC-claims.
+// Возвращает id пользователя. Существующему пользователю роль обновляется
+// согласно текущему claim-маппингу (источник истины — IdP/конфиг).
+func (s *Storage) UpsertUserByEmail(
+	ctx context.Context, email, fullName, roleCode string,
+) (string, error) {
+	var id string
+	err := s.pool.QueryRow(ctx,
+		`WITH role AS (SELECT id FROM roles WHERE code = $3)
+		 INSERT INTO users (username, email, full_name, role_id, is_active)
+		 SELECT $1, $1, $2, role.id, true FROM role
+		 ON CONFLICT (email) WHERE email IS NOT NULL
+		 DO UPDATE SET full_name = EXCLUDED.full_name,
+		               role_id = EXCLUDED.role_id,
+		               is_active = true
+		 RETURNING id`,
+		email, fullName, roleCode,
+	).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// роль не найдена (role CTE пуст) → INSERT не выполнился
+		return "", fmt.Errorf("storage: роль %q не найдена для upsert", roleCode)
+	}
+	if err != nil {
+		return "", fmt.Errorf("storage: upsert пользователя по email: %w", err)
+	}
+	return id, nil
+}

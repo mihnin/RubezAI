@@ -118,6 +118,14 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-rubezh-minio}
       MINIO_BUCKET: ${MINIO_BUCKET:-rubezh-documents}
       MINIO_SECURE: "false"
+      # OIDC-вход (K.1). Пусто → выключен, остаётся dev-login.
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_REDIRECT_URL: ${OIDC_REDIRECT_URL:-}
+      OIDC_FRONTEND_URL: ${OIDC_FRONTEND_URL:-http://localhost:5173}
+      OIDC_ROLE_CLAIM: ${OIDC_ROLE_CLAIM:-}
+      OIDC_ROLE_MAP: ${OIDC_ROLE_MAP:-}
     ports:
       - "${API_PORT:-8080}:8080"
     depends_on:
@@ -182,6 +190,23 @@ services:
       retries: 6
     networks:
       - rubezh
+    restart: unless-stopped
+
+  # dex — reference dev-IdP для теста OIDC-входа (K.1). Профиль dev-idp:
+  # не поднимается по умолчанию. Запуск: docker compose --profile dev-idp up -d dex
+  # Требует строки `127.0.0.1 dex` в hosts-файле ОС (см. deploy/dex/config.yaml).
+  dex:
+    image: dexidp/dex:v2.41.1
+    profiles: ["dev-idp"]
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    volumes:
+      - ./deploy/dex/config.yaml:/etc/dex/config.yaml:ro
+    ports:
+      - "5556:5556"
+    networks:
+      rubezh:
+        aliases:
+          - dex
     restart: unless-stopped
 
 networks:

@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { ShieldCheck, ArrowRight, Info } from "lucide-react";
+import { ShieldCheck, ArrowRight, Info, LogIn } from "lucide-react";
 import { useAuth } from "../auth/context";
 
 const ROLES = [
@@ -25,8 +25,26 @@ export default function LoginPage() {
   const [role, setRole] = useState("user");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const { login } = useAuth();
+  const { login, loginWithToken } = useAuth();
   const nav = useNavigate();
+
+  // Возврат с OIDC-callback: токен/ошибка приходят во фрагменте URL (K.1).
+  useEffect(() => {
+    const hash = window.location.hash.replace(/^#/, "");
+    if (!hash) return;
+    const p = new URLSearchParams(hash);
+    const err = p.get("error");
+    const tok = p.get("token");
+    window.history.replaceState(null, "", window.location.pathname);
+    if (err) {
+      setError(err);
+      return;
+    }
+    if (tok) {
+      loginWithToken(tok, p.get("role") || "user");
+      nav("/", { replace: true });
+    }
+  }, [loginWithToken, nav]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -120,11 +138,25 @@ export default function LoginPage() {
             )}
           </button>
 
-          <div className="mt-6 pt-5 border-t border-slate-800 text-xs text-slate-500 flex items-start gap-1.5">
+          <div className="mt-5 pt-5 border-t border-slate-800">
+            <a
+              href="/api/auth/oidc/login"
+              className="w-full h-11 rounded-lg border border-slate-700 hover:border-cyan-500 text-slate-200 font-medium transition flex items-center justify-center gap-2"
+            >
+              <LogIn className="w-4 h-4" strokeWidth={2} />
+              Войти через корпоративную учётную запись (SSO)
+            </a>
+            <p className="text-[11px] text-slate-500 mt-2 text-center">
+              OIDC-вход по корп. почте. Если SSO не настроен — кнопка вернёт
+              ошибку; используйте выбор роли выше (dev).
+            </p>
+          </div>
+
+          <div className="mt-5 pt-5 border-t border-slate-800 text-xs text-slate-500 flex items-start gap-1.5">
             <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" strokeWidth={2} />
             <span>
-              Токен хранится в localStorage. Замена на httpOnly cookie + OIDC —
-              после MVP.
+              Dev-вход (выбор роли) — токен в localStorage. SSO заменит его после
+              настройки OIDC.
             </span>
           </div>
         </form>

@@ -30,6 +30,8 @@ type Deps struct {
 	// ReloadRouter — hot-reload LLM Router из БД (F2). nil ⇒ изменения
 	// провайдеров видны только после restart api (только для тестов).
 	ReloadRouter func(ctx context.Context) error
+	// OIDC — RP для браузерного входа (K.1); nil ⇒ OIDC выключен, только dev-login.
+	OIDC *OIDCAuth
 }
 
 // NewRouter собирает HTTP-роутер сервиса. Маршруты /api защищены
@@ -52,6 +54,11 @@ func NewRouter(deps Deps) (http.Handler, *chat.Orchestrator) {
 	// Публичный auth-endpoint: выпуск dev-токена. Вне auth-middleware.
 	// docs/design/identity.md §«MVP auth-flow».
 	r.Post("/api/auth/dev-login", devLoginHandler(deps.Store, deps.AuthSecret))
+	// OIDC-вход (K.1) — публичные маршруты вне auth-middleware, если настроен.
+	if deps.OIDC != nil {
+		r.Get("/api/auth/oidc/login", deps.OIDC.login)
+		r.Get("/api/auth/oidc/callback", deps.OIDC.callback)
+	}
 	r.Route("/api", func(api chi.Router) {
 		api.Use(auth.Middleware(deps.AuthSecret))
 		api.Post("/policies/test", policyTestHandler)
