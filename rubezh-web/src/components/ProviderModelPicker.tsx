@@ -9,7 +9,7 @@ function modelSuggestions(providerName: string): string[] {
   if (n.includes("deepseek")) {
     return n.includes("local")
       ? ["deepseek-r1-distill-qwen-7b"]
-      : ["deepseek-chat", "deepseek-reasoner"];
+      : ["deepseek-v4-flash", "deepseek-v4-pro"];
   }
   if (n.includes("claude") || n.includes("anthropic")) {
     return ["claude-sonnet-4-6", "claude-opus-4-7", "claude-haiku-4-5-20251001"];

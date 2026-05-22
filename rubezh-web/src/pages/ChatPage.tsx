@@ -401,12 +401,16 @@ export default function ChatPage() {
 }
 
 function defaultModelFor(p: Model): string {
-  // Heuristics: для openai_compatible имя модели часто совпадает с именем
-  // провайдера, но для LM Studio это имя загруженной модели (другое).
-  // Стартуем с имени провайдера, пользователь правит в picker'е.
-  return p.adapter === "openai_compatible" && p.name.startsWith("deepseek")
-    ? "deepseek-r1-distill-qwen-7b"
-    : p.name;
+  // Имя модели зависит от провайдера и того, локальный он или облачный.
+  // DeepSeek: облако принимает deepseek-v4-* , а deepseek-r1-distill-qwen-7b —
+  // это ЛОКАЛЬНАЯ модель (LM Studio), облако её не знает. Различаем по trust.
+  const n = p.name.toLowerCase();
+  if (n.includes("deepseek")) {
+    return p.trust_level === "trusted_local"
+      ? "deepseek-r1-distill-qwen-7b"
+      : "deepseek-v4-flash";
+  }
+  return p.name;
 }
 
 
