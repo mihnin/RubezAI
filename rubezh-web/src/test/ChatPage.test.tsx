@@ -60,6 +60,83 @@ function renderChat() {
   );
 }
 
+// sseResponse — Response с SSE-телом (ReadableStream) для мока /api/chat.
+function sseResponse(events: string): Response {
+  const stream = new ReadableStream({
+    start(c) {
+      c.enqueue(new TextEncoder().encode(events));
+      c.close();
+    },
+  });
+  return new Response(stream, {
+    status: 200,
+    headers: { "Content-Type": "text/event-stream" },
+  });
+}
+
+describe("ChatPage — reveal реальных данных (J.2)", () => {
+  beforeEach(() => localStorage.clear());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("стримит ответ с псевдонимами и раскрывает реальные данные по кнопке", async () => {
+    const sse =
+      'event: meta\ndata: {"decision":"allow_masked","risk":{"level":"high","score":0.8,"classes":["pii"]},"provider":"deepseek-cloud","reasons":[],"request_id":"r1"}\n\n' +
+      'event: delta\ndata: {"content":"Ответ про ФИО_001"}\n\n' +
+      'event: done\ndata: {"request_id":"r1","assistant_message_id":"msg-1"}\n\n';
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url.endsWith("/api/models")) {
+          return Promise.resolve(jsonResponse([ENABLED_A]));
+        }
+        if (url.endsWith("/api/chat/sessions") && method === "POST") {
+          return Promise.resolve(
+            jsonResponse({
+              id: "11111111-1111-1111-1111-111111111111",
+              user_id: "22222222-2222-2222-2222-222222222222",
+              title: "web-ui",
+              created_at: "2026-01-01T00:00:00Z",
+              updated_at: "2026-01-01T00:00:00Z",
+            }),
+          );
+        }
+        if (url.endsWith("/api/chat") && method === "POST") {
+          return Promise.resolve(sseResponse(sse));
+        }
+        if (url.includes("/reveal") && method === "POST") {
+          return Promise.resolve(
+            jsonResponse({ revealed_text: "Ответ про Иванова Ивана" }),
+          );
+        }
+        return Promise.resolve(jsonResponse({}));
+      }),
+    );
+
+    renderChat();
+    await screen.findByText("deepseek-cloud"); // picker готов
+
+    fireEvent.change(screen.getByLabelText("Сообщение"), {
+      target: { value: "тест" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Сообщение"), { key: "Enter" });
+
+    // ответ пришёл с псевдонимами + появилась кнопка reveal
+    await screen.findByText("Ответ про ФИО_001");
+    const revealBtn = await screen.findByRole("button", {
+      name: /Показать реальные данные/i,
+    });
+
+    fireEvent.click(revealBtn);
+
+    // после reveal — реальные данные + бейдж «раскрыто»
+    await screen.findByText("Ответ про Иванова Ивана");
+    expect(await screen.findByText(/раскрыто/i)).toBeInTheDocument();
+  });
+});
+
 describe("ChatPage — provider/model picker (G.2c)", () => {
   beforeEach(() => localStorage.clear());
   afterEach(() => vi.restoreAllMocks());

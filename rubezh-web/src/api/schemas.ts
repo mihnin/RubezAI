@@ -38,6 +38,11 @@ export const ChatDonePayloadSchema = z.object({
   assistant_message_id: z.string().optional().default(""),
 });
 
+// Ответ POST /api/chat/messages/{id}/reveal (J.2).
+export const RevealSchema = z.object({
+  revealed_text: z.string(),
+});
+
 export const ChatErrorPayloadSchema = z.object({
   message: z.string(),
   request_id: z.string(),

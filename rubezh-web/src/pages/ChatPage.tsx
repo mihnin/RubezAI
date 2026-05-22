@@ -6,12 +6,14 @@ import {
   Sparkles,
   AlertCircle,
   ChevronDown,
+  Eye,
 } from "lucide-react";
 import { streamChat } from "../api/sse";
 import { apiFetch } from "../api/client";
 import {
   ModelListSchema,
   ChatSessionSchema,
+  RevealSchema,
   type ChatEvent,
   type Model,
 } from "../api/schemas";
@@ -21,6 +23,8 @@ interface Message {
   content: string;
   decision?: string;
   reasons?: string[];
+  id?: string; // id сообщения ассистента (из SSE done) — для reveal (J.2)
+  revealed?: boolean; // раскрыты ли реальные данные
 }
 
 const STORAGE_PROVIDER = "rubezh.chat.provider";
@@ -133,6 +137,29 @@ export default function ChatPage() {
     }
   }
 
+  // J.2: раскрытие реальных данных в ответе ассистента по кнопке
+  // (детерминированно на бэкенде; raw приходит только здесь, аудируется).
+  async function revealMessage(index: number) {
+    const msg = messages[index];
+    if (!msg?.id || msg.revealed) return;
+    try {
+      const data = await apiFetch(
+        `/api/chat/messages/${msg.id}/reveal`,
+        RevealSchema,
+        { method: "POST" },
+      );
+      setMessages((arr) =>
+        arr.map((m, j) =>
+          j === index
+            ? { ...m, content: data.revealed_text, revealed: true }
+            : m,
+        ),
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "не удалось раскрыть данные");
+    }
+  }
+
   return (
     <div className="h-screen flex flex-col">
       <header className="border-b border-slate-800 px-6 py-4 flex items-center justify-between">
@@ -185,6 +212,7 @@ export default function ChatPage() {
             key={i}
             message={m}
             streaming={streaming && i === messages.length - 1}
+            onReveal={() => revealMessage(i)}
           />
         ))}
       </div>
@@ -340,9 +368,20 @@ function applyEvent(
     setMessages((m) =>
       annotateLast(m, ev.payload.decision, ev.payload.reasons),
     );
+  } else if (ev.type === "done") {
+    // J.2: запоминаем id сообщения ассистента для кнопки reveal
+    if (ev.payload.assistant_message_id) {
+      setMessages((m) => attachLastID(m, ev.payload.assistant_message_id));
+    }
   } else if (ev.type === "error") {
     setError(`${ev.payload.message} (req=${ev.payload.request_id})`);
   }
+}
+
+function attachLastID(list: Message[], id: string): Message[] {
+  const last = list[list.length - 1];
+  if (!last || last.role !== "assistant") return list;
+  return [...list.slice(0, -1), { ...last, id }];
 }
 
 function appendDelta(list: Message[], delta: string): Message[] {
@@ -364,11 +403,17 @@ function annotateLast(
 function MessageBubble({
   message,
   streaming,
+  onReveal,
 }: {
   message: Message;
   streaming: boolean;
+  onReveal?: () => void;
 }) {
   const isUser = message.role === "user";
+  // J.2: раскрытие доступно для записанного masked-ответа, ещё не раскрытого
+  const canReveal =
+    !isUser && !!message.id && message.decision === "allow_masked" &&
+    !message.revealed;
   const decisionBad =
     message.decision &&
     (message.decision === "deny" || message.decision === "escalate");
@@ -386,6 +431,21 @@ function MessageBubble({
         <div className="whitespace-pre-wrap text-sm leading-relaxed text-slate-100">
           {message.content || (streaming ? "…" : "")}
         </div>
+        {canReveal && (
+          <button
+            onClick={onReveal}
+            className="mt-2.5 text-xs inline-flex items-center gap-1 text-cyan-400 hover:text-cyan-300"
+          >
+            <Eye className="w-3.5 h-3.5" strokeWidth={2} />
+            Показать реальные данные
+          </button>
+        )}
+        {message.revealed && (
+          <div className="mt-2.5 text-xs inline-flex items-center gap-1 text-emerald-300">
+            <Eye className="w-3.5 h-3.5" strokeWidth={2} />
+            раскрыто · записано в аудит
+          </div>
+        )}
         {message.decision && message.decision !== "allow_raw" && (
           <div
             className={`mt-2.5 pt-2 border-t border-slate-700/50 text-xs flex items-start gap-1.5 ${
