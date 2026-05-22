@@ -286,7 +286,7 @@ function CreateModelModal({
   const [form, setForm] = useState<ModelForm>({
     name: "",
     trust_level: "external",
-    adapter: "openai",
+    adapter: "openai_compatible",
     endpoint: "",
     api_key: "",
   });
@@ -334,9 +334,10 @@ function CreateModelModal({
               }
               className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1"
             >
-              <option value="external">external</option>
-              <option value="trusted_local">trusted_local</option>
-              <option value="internal">internal</option>
+              <option value="external">external (облако, только masked)</option>
+              <option value="trusted_local">trusted_local (локально, raw)</option>
+              <option value="russian_cloud">russian_cloud</option>
+              <option value="on_prem">on_prem</option>
             </select>
           </Field>
           <Field label="Adapter">
@@ -345,15 +346,18 @@ function CreateModelModal({
               onChange={(e) => setForm({ ...form, adapter: e.target.value })}
               className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1"
             >
-              <option value="openai">openai</option>
-              <option value="mock">mock</option>
+              <option value="openai_compatible">
+                openai_compatible (OpenAI/DeepSeek/Gemini/Grok/vLLM/LM Studio)
+              </option>
+              <option value="anthropic">anthropic (Claude)</option>
+              <option value="mock">mock (для тестов)</option>
             </select>
           </Field>
           <Field label="Endpoint">
             <input
               value={form.endpoint}
               onChange={(e) => setForm({ ...form, endpoint: e.target.value })}
-              placeholder="http://localhost:1234/v1"
+              placeholder="https://api.deepseek.com/v1"
               className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1"
             />
           </Field>
