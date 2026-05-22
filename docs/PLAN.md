@@ -275,6 +275,23 @@
 - **Тесты:** +33 (детекторы карт/паспорта/контекстных ИНН-СНИЛС, модуль
   LLM-review, парсер ответов, fail-open). Всего 178 в санитайзере, ruff/mypy чисты.
 
+### ~~Итерация G.1 — Контрактные тесты Go ↔ TypeScript~~ ✅ Реализовано
+
+- **Цель:** автоматически ловить рассинхрон Go-DTO ↔ Zod-схем (4 бага E.2).
+- Go golden-тест `contract_export_test.go` рефлексией 9 DTO генерирует
+  нормализованные формы в `rubezh-web/src/test/contracts/*.json`; TS
+  `contract.test.ts` сверяет их с формой Zod-схем (`_def`): поля, типы,
+  nullability. CI-джобы `web` + `contract-sync`. README + design-doc.
+- **Тесты:** Vitest 38/38 (было 21; +9 контрактных).
+
+### ~~Итерация G.2 — UI-управление провайдерами + RTL~~ ✅ Реализовано
+
+- **G.2a/b:** `PATCH /api/models/:id` (toggle is_enabled), `DELETE
+  /api/models/:id` (с FK-защитой → 409 + soft-disable), RBAC, hot-reload
+  Router. Storage + handler-тесты; живой smoke 200/204/404/403.
+- **G.2c:** UI toggle/delete в ModelsPage + RTL-тесты ModelsPage (3),
+  IncidentsPage (3: If-Match, ResolutionDialog, 412), ChatPage (2: picker).
+
 ---
 
 ## Технический долг
