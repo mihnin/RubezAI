@@ -215,9 +215,9 @@ func TestOrchestratorAllowMasked(t *testing.T) {
 	if lm.gotText != "Звонил ФИО_001" {
 		t.Errorf("в LLM ушёл текст %q, ожидался санированный", lm.gotText)
 	}
-	// пользователю — восстановленный ответ
-	if sink.text() != "Ответ про Иванову" {
-		t.Errorf("ответ пользователю = %q, ожидался восстановленный", sink.text())
+	// J.2: пользователю — ответ с псевдонимами (реальные данные — по кнопке reveal)
+	if sink.text() != "Ответ про ФИО_001" {
+		t.Errorf("ответ пользователю = %q, ожидался с псевдонимами", sink.text())
 	}
 	if sink.doneID != "r-1" {
 		t.Errorf("done request_id = %q", sink.doneID)

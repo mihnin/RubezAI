@@ -162,7 +162,10 @@ func finalTexts(
 		remasked := pmap.Remask(rawOutput)
 		return remasked, remasked
 	case act.restore:
-		return rawOutput, pmap.Restore(rawOutput)
+		// J.2: ответ показывается и хранится с псевдонимами (Remask на случай
+		// протечки LLM); реальные значения раскрываются по кнопке через reveal.
+		remasked := pmap.Remask(rawOutput)
+		return remasked, remasked
 	default: // allow_raw
 		return rawOutput, rawOutput
 	}
