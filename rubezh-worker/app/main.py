@@ -7,9 +7,10 @@ Lifespan запускает: requeue_stuck → бесконечный claim→pr
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 import asyncpg
 from fastapi import FastAPI
@@ -24,13 +25,27 @@ from app.sanitizer_client import SanitizerClient
 logger = logging.getLogger("rubezh-worker")
 
 
+async def _sleep_or_stop(stop: asyncio.Event, timeout: float) -> None:
+    """Ждёт stop или таймаут (poll-интервал)."""
+    with contextlib.suppress(TimeoutError):
+        await asyncio.wait_for(stop.wait(), timeout=timeout)
+
+
 async def _queue_loop(
     settings: Settings, pool: asyncpg.Pool, stop: asyncio.Event,
 ) -> None:
-    """Бесконечный loop обработки очереди."""
-    n = await requeue_stuck(pool, settings.stuck_threshold_minutes)
-    if n > 0:
-        logger.info("requeue stuck документов", extra={"count": n})
+    """Бесконечный loop обработки очереди.
+
+    Устойчив к не-готовой БД при старте (race «worker до миграций»): ошибки
+    запроса логируются и loop повторяет попытку — после применения миграций
+    обработка возобновляется без рестарта контейнера.
+    """
+    try:
+        n = await requeue_stuck(pool, settings.stuck_threshold_minutes)
+        if n > 0:
+            logger.info("requeue stuck документов", extra={"count": n})
+    except Exception as exc:  # БД может быть не готова (нет таблиц) — ждём
+        logger.warning("requeue_stuck при старте не удался (ждём БД?): %s", exc)
 
     minio = WorkerMinio(
         settings.minio_endpoint, settings.minio_access_key,
@@ -43,15 +58,14 @@ async def _queue_loop(
     embedder = MockEmbedder()
     try:
         while not stop.is_set():
-            doc = await claim_next_document(pool, settings.max_attempts)
+            try:
+                doc = await claim_next_document(pool, settings.max_attempts)
+            except Exception as exc:  # транзиентная ошибка БД — повтор
+                logger.warning("claim очереди не удался, повтор: %s", exc)
+                await _sleep_or_stop(stop, settings.queue_poll_interval_seconds)
+                continue
             if doc is None:
-                try:
-                    await asyncio.wait_for(
-                        stop.wait(),
-                        timeout=settings.queue_poll_interval_seconds,
-                    )
-                except asyncio.TimeoutError:
-                    pass
+                await _sleep_or_stop(stop, settings.queue_poll_interval_seconds)
                 continue
             await process_document(
                 doc, pool=pool, minio=minio, sanitizer=sanitizer,
@@ -88,7 +102,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         if task is not None:
             try:
                 await asyncio.wait_for(task, timeout=10)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 task.cancel()
         if pool is not None:
             await pool.close()
