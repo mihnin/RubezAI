@@ -21,6 +21,7 @@ _PREFIX: dict[EntityType, str] = {
     EntityType.OGRN: "ОГРН",
     EntityType.BIK: "БИК",
     EntityType.ACCOUNT: "СЧЕТ",
+    EntityType.BANK_CARD: "КАРТА",
     EntityType.SECRET_API_KEY: "СЕКРЕТ",
     EntityType.SECRET_JWT: "СЕКРЕТ",
     EntityType.SECRET_OAUTH: "СЕКРЕТ",

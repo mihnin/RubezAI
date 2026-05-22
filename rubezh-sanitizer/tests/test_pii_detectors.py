@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from app.detectors.pii import validate_inn, validate_ogrn, validate_snils
+from app.detectors.pii import (
+    validate_card_luhn,
+    validate_inn,
+    validate_ogrn,
+    validate_snils,
+)
 from app.detectors.registry import scan
 from app.domain.entities import Category, EntityType, Match
 
@@ -56,7 +61,54 @@ def test_validate_snils_payload_100() -> None:
     assert validate_snils("920-000-100 00") is True
 
 
+# --- контрольная сумма банковской карты (Luhn) ---
+
+
+@pytest.mark.parametrize("value", ["4539 1488 0343 6467", "4111111111111111", "5500005555555559"])
+def test_validate_card_luhn_valid(value: str) -> None:
+    assert validate_card_luhn(value) is True
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["4539 1488 0343 6468", "1234567812345678", "123", "0000000000000000"],
+)
+def test_validate_card_luhn_invalid(value: str) -> None:
+    assert validate_card_luhn(value) is False
+
+
 # --- детекторы: каждый тип находится в тексте ---
+
+
+def test_detect_bank_card_grouped() -> None:
+    # Карта в формате 4-4-4-4 ловится даже без валидной Luhn-суммы (как в
+    # реальном договоре): «карточное» форматирование само по себе — сильный признак.
+    matches = scan("Реквизиты карты для возврата: 4276 1500 1234 5678.")
+    card = next((m for m in matches if m.type == EntityType.BANK_CARD), None)
+    assert card is not None
+    assert card.value == "4276 1500 1234 5678"
+    assert card.category is Category.PII
+
+
+def test_detect_bank_card_continuous_luhn() -> None:
+    # Слитная 16-значная последовательность распознаётся только при валидной Luhn.
+    assert EntityType.BANK_CARD in _types(scan("карта 4539148803436467 действует"))
+    assert EntityType.BANK_CARD not in _types(scan("код 1234567812345678 в системе"))
+
+
+def test_bank_card_does_not_match_20_digit_account() -> None:
+    # 20-значный расчётный счёт не должен распознаваться как карта.
+    matches = scan("р/с 40702810700000123456 в банке")
+    assert EntityType.BANK_CARD not in _types(matches)
+    assert EntityType.ACCOUNT in _types(matches)
+
+
+def test_detect_passport_with_number_sign() -> None:
+    # Паспорт в формате «серия № номер» (как в договоре) ловится со знаком №.
+    matches = scan("паспорт серии 4501 № 234567 выдан ОВД")
+    passport = next((m for m in matches if m.type == EntityType.PASSPORT), None)
+    assert passport is not None
+    assert "4501" in passport.value and "234567" in passport.value
 
 
 def _types(matches: list[Match]) -> set[EntityType]:

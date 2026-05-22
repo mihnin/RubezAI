@@ -46,6 +46,21 @@ def validate_snils(value: str) -> bool:
     return payload == digits[9] * 10 + digits[10]
 
 
+def validate_card_luhn(value: str) -> bool:
+    """Проверка номера банковской карты по алгоритму Луна (13–19 цифр)."""
+    digits = _digits(value)
+    if not 13 <= len(digits) <= 19 or _is_degenerate(digits):
+        return False
+    checksum = 0
+    for i, num in enumerate(reversed(digits)):
+        if i % 2 == 1:
+            num *= 2
+            if num > 9:
+                num -= 9
+        checksum += num
+    return checksum % 10 == 0
+
+
 def validate_ogrn(value: str) -> bool:
     """Проверка контрольной суммы ОГРН (13 цифр) или ОГРНИП (15 цифр)."""
     digits = _digits(value)
@@ -88,7 +103,23 @@ def pii_detectors() -> list[RegexDetector]:
         ),
         RegexDetector(
             name="passport", entity_type=EntityType.PASSPORT, category=pii,
-            pattern=r"\b\d{4}\s\d{6}\b",
+            # серия (4) + номер (6); между ними допустим знак «№»/«N» и пробелы
+            # («4501 № 234567», «4509 123456»).
+            pattern=r"\b\d{4}\s+(?:[№N]\s*)?\d{6}\b",
+        ),
+        # Банковская карта: слитная 16-значная последовательность с валидной
+        # контрольной суммой Луна (высокая точность; 16 цифр — доминирующий
+        # формат, не пересекается с ИНН-12 и ОГРН-13/15).
+        RegexDetector(
+            name="bank_card_luhn", entity_type=EntityType.BANK_CARD, category=pii,
+            pattern=r"\b\d{16}\b", validator=validate_card_luhn,
+        ),
+        # Карта в «карточном» форматировании 4-4-4-4 с разделителями ловится и
+        # без валидной Luhn-суммы: само форматирование — сильный признак карты.
+        # Разделитель обязателен, поэтому 20-значный счёт сюда не попадает.
+        RegexDetector(
+            name="bank_card_grouped", entity_type=EntityType.BANK_CARD, category=pii,
+            pattern=r"\b\d{4}[\s\-]\d{4}[\s\-]\d{4}[\s\-]\d{4}\b", confidence=0.85,
         ),
         RegexDetector(
             name="snils", entity_type=EntityType.SNILS, category=pii,

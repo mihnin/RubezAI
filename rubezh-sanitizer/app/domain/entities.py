@@ -23,6 +23,7 @@ class EntityType(StrEnum):
     PASSPORT = "PASSPORT"
     SNILS = "SNILS"
     INN = "INN"
+    BANK_CARD = "BANK_CARD"
     KPP = "KPP"
     OGRN = "OGRN"
     BIK = "BIK"

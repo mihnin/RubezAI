@@ -25,7 +25,7 @@
           "description": "Тип сущности",
           "enum": [
             "PERSON", "PHONE", "EMAIL", "PASSPORT", "SNILS", "INN", "KPP",
-            "OGRN", "BIK", "ACCOUNT", "SECRET_API_KEY", "SECRET_JWT",
+            "OGRN", "BIK", "ACCOUNT", "BANK_CARD", "SECRET_API_KEY", "SECRET_JWT",
             "SECRET_OAUTH", "SECRET_PASSWORD", "SECRET_DSN", "SECRET_CONN_STRING",
             "COMMERCIAL_AMOUNT", "COMMERCIAL_CONTRACT", "COMMERCIAL_SUPPLIER",
             "COMMERCIAL_TERMS"
