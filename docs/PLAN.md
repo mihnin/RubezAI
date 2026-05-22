@@ -292,6 +292,31 @@
 - **G.2c:** UI toggle/delete в ModelsPage + RTL-тесты ModelsPage (3),
   IncidentsPage (3: If-Match, ResolutionDialog, 412), ChatPage (2: picker).
 
+### ◐ Итерация J — Чат с контролируемым выводом ПДн за контур
+
+План — `docs/design/chat-pii-flow.md` (ревью архитектора 7.5→v2, все MAJOR
+закрыты). Реализовано и протестировано:
+
+- **J.0/J.1** ✅ `POST /api/chat/preview` + `preview_token` (RAM-кэш,
+  owner-bound, одноразовый) — единый sanitize переиспользуется в `/api/chat`
+  (детерминизм preview↔chat; MAJOR-1).
+- **J.2** ✅ ре-маскирование ответа `allow_masked` (Remask, не auto-restore);
+  `POST /api/chat/messages/{id}/reveal` (детерминированно, owner-only,
+  AAD-расшифровка, `no-store`, raw не логируется, audit `response_revealed`,
+  fail-closed); SSE `done` несёт `assistant_message_id`.
+- **J.4 (frontend)** ✅ кнопка «Показать реальные данные»; гейт CloudGate
+  перед облаком (по `preview_token`) + индикатор обработки; picker с
+  разделением «Облачные ⚠ / Локальные 🛡». RTL: гейт→подтверждение→стрим→reveal.
+- **J.3 (часть)** ✅ обезличенная выгрузка `GET /api/documents/{id}/masked`
+  (.txt из sanitized-чанков) + кнопки в DocumentsPage.
+- **Дизайн:** визуальный макет (PNG, рендер прототипа) + HTML-прототип +
+  UX-спека. Stitch-макеты — после перезапуска CC.
+
+**Осталось (J.3 «документ в чате»):** attach документа прямо в чат с прогоном
+его текста через тот же sanitize→gate→LLM. Требует решения: источник текста —
+переиспользовать существующий sanitization_result документа (с его mappings) vs
+ре-парсить raw из MinIO. Вынесено в отдельный шаг (см. design-doc §J.3, MINOR-2).
+
 ---
 
 ## Технический долг

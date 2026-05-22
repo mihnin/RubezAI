@@ -210,7 +210,17 @@ F + H + H.3 + G.1 + G.2 реализованы; backend и frontend подтве
 Zod-схемами (поля/типы/nullability). CI-джобы `web` + `contract-sync`.
 **G.2 — управление провайдерами:** `PATCH/DELETE /api/models/:id`
 (toggle is_enabled + удаление с FK-защитой → 409/soft-disable, RBAC,
-hot-reload), UI в ModelsPage, RTL-тесты Models/Incidents/Chat. Vitest 38/38.
+hot-reload), UI в ModelsPage, RTL-тесты Models/Incidents/Chat.
+
+**J — чат с контролируемым выводом ПДн (`docs/design/chat-pii-flow.md`):**
+`POST /api/chat/preview` + `preview_token` (единый sanitize, детерминизм
+preview↔chat); ответ `allow_masked` показывается с псевдонимами (Remask),
+реальные данные — по кнопке `POST /api/chat/messages/{id}/reveal`
+(детерминированно, owner-only, no-store, audit `response_revealed`); SSE `done`
+несёт `assistant_message_id`. Frontend: гейт CloudGate перед облаком, кнопка
+reveal, picker cloud/local. `GET /api/documents/{id}/masked` — обезличенная
+выгрузка. Остаток: attach документа в чат (design-decision по источнику текста).
+Vitest 39/39.
 
 **H.3 — LLM-обезличивание (фильтр 2/3):** локальная русскоязычная LLM
 (LM Studio / DeepSeek-7B) подключена через `app/llm_review/` как `Detector`,
