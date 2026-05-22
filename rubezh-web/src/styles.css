@@ -19,3 +19,98 @@
 body {
   font-family: "Inter", "Inter Tight", -apple-system, "Segoe UI", sans-serif;
 }
+
+/* Рендер Markdown в ответах ассистента (react-markdown + remark-gfm). */
+.md-body > :first-child {
+  margin-top: 0;
+}
+.md-body > :last-child {
+  margin-bottom: 0;
+}
+.md-body p {
+  margin: 0.5rem 0;
+}
+.md-body h1,
+.md-body h2,
+.md-body h3 {
+  font-weight: 600;
+  margin: 0.75rem 0 0.4rem;
+  line-height: 1.25;
+}
+.md-body h1 {
+  font-size: 1.15rem;
+}
+.md-body h2 {
+  font-size: 1.05rem;
+}
+.md-body h3 {
+  font-size: 1rem;
+}
+.md-body ul,
+.md-body ol {
+  margin: 0.4rem 0;
+  padding-left: 1.4rem;
+}
+.md-body ul {
+  list-style: disc;
+}
+.md-body ol {
+  list-style: decimal;
+}
+.md-body li {
+  margin: 0.2rem 0;
+}
+.md-body a {
+  color: hsl(189 60% 65%);
+  text-decoration: underline;
+}
+.md-body code {
+  background: hsl(217 19% 14%);
+  border: 1px solid hsl(217 16% 22%);
+  border-radius: 0.25rem;
+  padding: 0.05rem 0.3rem;
+  font-family: ui-monospace, monospace;
+  font-size: 0.85em;
+}
+.md-body pre {
+  background: hsl(220 24% 8%);
+  border: 1px solid hsl(217 16% 22%);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  overflow-x: auto;
+  margin: 0.5rem 0;
+}
+.md-body pre code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+.md-body blockquote {
+  border-left: 3px solid hsl(217 16% 30%);
+  padding-left: 0.75rem;
+  color: hsl(213 14% 72%);
+  margin: 0.5rem 0;
+}
+.md-body table {
+  border-collapse: collapse;
+  margin: 0.6rem 0;
+  width: 100%;
+  display: block;
+  overflow-x: auto;
+}
+.md-body th,
+.md-body td {
+  border: 1px solid hsl(217 16% 26%);
+  padding: 0.35rem 0.6rem;
+  text-align: left;
+  font-size: 0.9em;
+}
+.md-body th {
+  background: hsl(217 19% 14%);
+  font-weight: 600;
+}
+.md-body hr {
+  border: 0;
+  border-top: 1px solid hsl(217 16% 22%);
+  margin: 0.75rem 0;
+}
