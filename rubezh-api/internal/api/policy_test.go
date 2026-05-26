@@ -15,6 +15,7 @@ import (
 
 	"github.com/rubezh-ai/rubezh-api/internal/auth"
 	"github.com/rubezh-ai/rubezh-api/internal/crypto"
+	"github.com/rubezh-ai/rubezh-api/internal/llm"
 	"github.com/rubezh-ai/rubezh-api/internal/storage"
 )
 
@@ -25,6 +26,7 @@ func apiTestRouter() http.Handler {
 		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Store:      nil, // /api/policies/test и /health не обращаются к БД
 		AuthSecret: apiTestSecret,
+		Embedder:   llm.MockEmbedder{}, // fail-closed контракт NewRouter
 	})
 	return h
 }
@@ -254,6 +256,7 @@ func dbRouter(t *testing.T) (http.Handler, func()) {
 		Store:         store,
 		AuthSecret:    apiTestSecret,
 		MappingCipher: cipher,
+		Embedder:      llm.MockEmbedder{},
 	})
 	return router, store.Close
 }

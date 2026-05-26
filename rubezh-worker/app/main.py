@@ -16,7 +16,7 @@ import asyncpg
 from fastapi import FastAPI
 
 from app.config import Settings, load_settings
-from app.embeddings import MockEmbedder
+from app.embeddings import build_embedder
 from app.minio_client import WorkerMinio
 from app.processor import process_document
 from app.queue import claim_next_document, requeue_stuck
@@ -55,7 +55,17 @@ async def _queue_loop(
     sanitizer = SanitizerClient(
         settings.sanitizer_url, concurrency=settings.sanitize_concurrency,
     )
-    embedder = MockEmbedder()
+    embedder = build_embedder(
+        kind=settings.embedder_kind,
+        url=settings.embedder_url,
+        model=settings.embedder_model,
+        api_key=settings.embedder_api_key,
+        timeout_seconds=settings.embedder_timeout_seconds,
+    )
+    logger.info(
+        "embedder инициализирован",
+        extra={"kind": settings.embedder_kind, "name": embedder.name},
+    )
     try:
         while not stop.is_set():
             try:

@@ -39,7 +39,14 @@
         "response_revealed",
         "document_masked_downloaded",
         "provider_credential_added",
-        "provider_credential_removed"
+        "provider_credential_removed",
+        "rag_query",
+        "policy_revised_after_rag",
+        "policy_revised_after_rag_throttled",
+        "rate_limit_exceeded",
+        "acl_violation_attempt",
+        "rag_chunk_suspicious_pattern",
+        "rag_chunk_dropped_high_risk"
       ]
     },
     "AuditRiskLevel": {

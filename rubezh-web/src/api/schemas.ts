@@ -84,13 +84,40 @@ export const ChatErrorPayloadSchema = z.object({
   request_id: z.string(),
 });
 
+// Параметры RAG в /api/chat (Итерация 11 §Р4 Ф4c, контракт
+// rag.schema.json#RagRequestParams). Запрашивает retrieval'у бэкенд перед
+// runLLM; включается явным флагом enabled=true.
+export const RagRequestParamsSchema = z.object({
+  enabled: z.boolean(),
+  document_ids: z.array(z.string().uuid()).nullable().optional(),
+  top_k: z.number().int().min(1).max(10).optional(),
+});
+export type RagRequestParams = z.infer<typeof RagRequestParamsSchema>;
+
+// Метаданные одного источника в SSE event rag_hits (без snippet'а — он
+// уходит только в LLM-context). Контракт rag.schema.json#RagHitMeta.
+export const RagHitMetaSchema = z.object({
+  document_id: z.string().uuid(),
+  filename: z.string(),
+  chunk_index: z.number().int().nonnegative(),
+  relevance: z.number(),
+});
+export type RagHitMeta = z.infer<typeof RagHitMetaSchema>;
+
+// Payload SSE-события rag_hits (chat.schema.json#SseRagHits).
+export const ChatRagHitsPayloadSchema = z.object({
+  request_id: z.string(),
+  hits: z.array(RagHitMetaSchema),
+});
+
 // Нормализованный фронтовый ChatEvent — discriminated по type,
 // формируется из backend SSE-events в sse.ts.
 export type ChatEvent =
   | { type: "meta"; payload: z.infer<typeof ChatMetaPayloadSchema> }
   | { type: "delta"; payload: z.infer<typeof ChatDeltaPayloadSchema> }
   | { type: "done"; payload: z.infer<typeof ChatDonePayloadSchema> }
-  | { type: "error"; payload: z.infer<typeof ChatErrorPayloadSchema> };
+  | { type: "error"; payload: z.infer<typeof ChatErrorPayloadSchema> }
+  | { type: "rag_hits"; payload: z.infer<typeof ChatRagHitsPayloadSchema> };
 
 export type ChatEntity = z.infer<typeof ChatEntitySchema>;
 

@@ -111,6 +111,57 @@ func (s *Storage) GetDocument(
 	return d, nil
 }
 
+// FilterAccessibleDocuments возвращает подмножество переданных
+// document_id, к которым у user (userID, role) есть доступ согласно
+// той же ACL-логике, что и SearchChunks (owner OR acl.user_id OR
+// acl.role; supervisor-роли видят всё). Документы со status='deleted'
+// игнорируются.
+//
+// Назначение (Итерация 11 §Р3, BLOCKER B1 диагностика):
+// `searchHandler` использует это для записи `acl_violation_attempt`
+// БЕЗ false-positive при limit clamping (когда `len(results) < len(requested)`
+// просто потому что top-K отрезал хвост). Сравнивать нужно «сколько id
+// прошли ACL» vs «сколько было запрошено», а не «сколько вернулось в
+// результатах поиска».
+func (s *Storage) FilterAccessibleDocuments(
+	ctx context.Context, userID, role string, documentIDs []string,
+) ([]string, error) {
+	if len(documentIDs) == 0 {
+		return nil, nil
+	}
+	// Supervisor-роли видят все done-документы.
+	var rows pgx.Rows
+	var err error
+	switch role {
+	case "admin", "security_officer", "compliance_officer", "auditor":
+		rows, err = s.pool.Query(ctx,
+			`SELECT id FROM documents
+			 WHERE id = ANY($1::uuid[]) AND status != 'deleted'`,
+			documentIDs)
+	default:
+		rows, err = s.pool.Query(ctx,
+			`SELECT id FROM documents
+			 WHERE id = ANY($1::uuid[]) AND status != 'deleted'
+			   AND (owner_id = $2::uuid
+			        OR acl @> jsonb_build_array(jsonb_build_object('user_id', $2::text))
+			        OR acl @> jsonb_build_array(jsonb_build_object('role', $3::text)))`,
+			documentIDs, userID, role)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("storage: filter accessible documents: %w", err)
+	}
+	defer rows.Close()
+	out := make([]string, 0, len(documentIDs))
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("storage: scan accessible: %w", err)
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 // CheckDocumentAccess проверяет ACL для роли userID+role.
 // Возвращает nil если доступ есть; ErrDocumentForbidden иначе.
 //

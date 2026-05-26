@@ -54,6 +54,18 @@ class Settings(BaseSettings):
     max_attempts: int = Field(default=3, alias="WORKER_MAX_ATTEMPTS")
     sanitize_concurrency: int = Field(default=4, alias="WORKER_SANITIZE_CONCURRENCY")
 
+    # Embedder (Итерация 11 §Р2). EMBEDDER_KIND={mock|openai_compatible}.
+    # Симметрия с rubezh-api: оба сервиса должны иметь идентичный
+    # embedder, иначе query-вектор и doc-вектор живут в разных
+    # пространствах и cosine ranking бесполезен.
+    embedder_kind: str = Field(default="mock", alias="EMBEDDER_KIND")
+    embedder_url: str = Field(default="", alias="EMBEDDER_URL")
+    embedder_model: str = Field(default="", alias="EMBEDDER_MODEL")
+    embedder_api_key: str = Field(default="", alias="EMBEDDER_API_KEY")
+    embedder_timeout_seconds: float = Field(
+        default=30.0, alias="EMBEDDER_TIMEOUT_SECONDS"
+    )
+
 
 def load_settings() -> Settings:
     """Загружает Settings из env. Падает при отсутствии обязательных полей."""

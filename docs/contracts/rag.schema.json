@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rubezh-ai/contracts/rag.schema.json",
+  "title": "Контракт RAG: /api/search + расширения /api/chat (rag)",
+  "description": "DTO эндпойнтов RAG (Итерация 11). Зафиксированы request/response /api/search и параметры rag в /api/chat (расширение chat.schema.json). См. docs/design/iteration-11-rag.md.",
+  "$defs": {
+    "SearchRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["query"],
+      "properties": {
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
+          "description": "Текст запроса для поиска. Sanitize'ится перед embed (никакого raw в embeddings/audit)."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 20,
+          "description": "Кол-во результатов (1..20; 0/неуказано → default 10; >20 → clamp до 20)."
+        },
+        "document_ids": {
+          "type": "array",
+          "items": { "type": "string", "format": "uuid" },
+          "description": "Опциональный фильтр поиска по подмножеству документов. Применяется ПОВЕРХ ACL: чужие id silent-фильтруются (BLOCKER B1)."
+        }
+      }
+    },
+    "SearchHit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["chunk_id", "document_id", "chunk_index", "snippet", "filename", "relevance"],
+      "properties": {
+        "chunk_id":    { "type": "string", "format": "uuid" },
+        "document_id": { "type": "string", "format": "uuid" },
+        "chunk_index": { "type": "integer", "minimum": 0 },
+        "snippet": {
+          "type": "string",
+          "maxLength": 4096,
+          "description": "Sanitized текст, truncated до 512 рун (UTF-8 safe). НЕ содержит raw ПДн (план §Р1)."
+        },
+        "filename":    { "type": "string" },
+        "relevance":   {
+          "type": "number",
+          "description": "1 - cosine_distance; ближе к 1 = релевантнее. Может быть отрицательным для ортогональных/противоположных векторов."
+        },
+        "risk_level": {
+          "type": ["string", "null"],
+          "enum": ["low", "medium", "high", "critical", null],
+          "description": "Последний risk_level из sanitization_results документа; null если не sanitized."
+        }
+      }
+    },
+    "SearchStats": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["query_had_pii", "latency_ms"],
+      "properties": {
+        "query_had_pii": {
+          "type": "boolean",
+          "description": "Sanitizer нашёл сущности в запросе. Не влияет на ответ — диагностика для UI."
+        },
+        "latency_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Полное время обработки запроса в миллисекундах (sanitize + embed + search + audit)."
+        }
+      }
+    },
+    "SearchResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["results", "stats"],
+      "properties": {
+        "results": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/SearchHit" }
+        },
+        "stats": { "$ref": "#/$defs/SearchStats" }
+      }
+    },
+    "RagRequestParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "description": "Расширение ChatRequest (план §Р4): автоматический retrieval перед runLLM. Явный флаг, не эвристика.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "true → retrieval включён; false/отсутствует → старое поведение без RAG."
+        },
+        "document_ids": {
+          "type": ["array", "null"],
+          "items": { "type": "string", "format": "uuid" },
+          "description": "Подмножество документов для retrieval; null → все доступные (через ACL)."
+        },
+        "top_k": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10,
+          "description": "Кол-во чанков для инъекции в LLM-context (1..10, default 5)."
+        }
+      }
+    },
+    "RagHitMeta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["document_id", "filename", "chunk_index", "relevance"],
+      "description": "Метаданные источника для SSE-event 'rag_hits' (без snippet'а — он уходит только в LLM-context).",
+      "properties": {
+        "document_id": { "type": "string", "format": "uuid" },
+        "filename":    { "type": "string" },
+        "chunk_index": { "type": "integer", "minimum": 0 },
+        "relevance":   { "type": "number" }
+      }
+    }
+  }
+}

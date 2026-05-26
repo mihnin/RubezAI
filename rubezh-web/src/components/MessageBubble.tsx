@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { ShieldAlert, Eye, Copy, Check } from "lucide-react";
+import { ShieldAlert, Eye, Copy, Check, BookOpen } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import type { RagHitMeta } from "../api/schemas";
 
 export interface Message {
   role: "user" | "assistant";
@@ -10,6 +11,8 @@ export interface Message {
   reasons?: string[];
   id?: string; // id сообщения ассистента (из SSE done) — для reveal (J.2)
   revealed?: boolean; // раскрыты ли реальные данные
+  // RAG-источники: метаданные чанков, попавших в LLM-context (Итерация 11 §Р4).
+  ragHits?: RagHitMeta[];
 }
 
 export function MessageBubble({
@@ -105,6 +108,32 @@ export function MessageBubble({
                 раскрыто · записано в аудит
               </span>
             )}
+          </div>
+        )}
+
+        {!isUser && message.ragHits && message.ragHits.length > 0 && (
+          <div
+            className="mt-2.5 pt-2 border-t border-slate-700/50 text-xs"
+            data-testid="rag-sources"
+          >
+            <div className="flex items-center gap-1.5 text-slate-400 mb-1.5">
+              <BookOpen className="w-3.5 h-3.5" strokeWidth={2} />
+              <span>Источники:</span>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {message.ragHits.map((h, idx) => (
+                <span
+                  key={`${h.document_id}:${h.chunk_index}:${idx}`}
+                  className="inline-flex items-center gap-1 bg-slate-800/70 border border-slate-700 rounded-md px-2 py-0.5 text-slate-300"
+                  title={`${h.filename} · фрагмент #${h.chunk_index} · релевантность ${Math.round(h.relevance * 100)}%`}
+                >
+                  <span className="truncate max-w-[12rem]">{h.filename}</span>
+                  <span className="text-slate-500">
+                    · {Math.round(h.relevance * 100)}%
+                  </span>
+                </span>
+              ))}
+            </div>
           </div>
         )}
 

@@ -146,11 +146,27 @@ type fakeSink struct {
 	doneMsgID string
 	failMsg   string
 	failedID  string
+	// rag — переданные источники retrieval'а (Итерация 11 §Р4 Ф4c).
+	rag      []RAGHit
+	ragOrder int // позиция RagHits относительно Meta/Delta для проверок порядка
+	tick     int
+	metaTick int
+	ragTick  int
+	dlt1Tick int
 }
 
-func (f *fakeSink) Meta(m MetaEvent) error { f.meta = &m; return nil }
+func (f *fakeSink) Meta(m MetaEvent) error {
+	f.meta = &m
+	f.tick++
+	f.metaTick = f.tick
+	return nil
+}
 func (f *fakeSink) Delta(content string) error {
 	f.deltas = append(f.deltas, content)
+	if f.dlt1Tick == 0 {
+		f.tick++
+		f.dlt1Tick = f.tick
+	}
 	return nil
 }
 func (f *fakeSink) Done(requestID, assistantMessageID string) error {
@@ -161,6 +177,12 @@ func (f *fakeSink) Done(requestID, assistantMessageID string) error {
 func (f *fakeSink) Fail(message, requestID string) error {
 	f.failMsg = message
 	f.failedID = requestID
+	return nil
+}
+func (f *fakeSink) RagHits(_ string, hits []RAGHit) error {
+	f.rag = append([]RAGHit(nil), hits...)
+	f.tick++
+	f.ragTick = f.tick
 	return nil
 }
 func (f *fakeSink) text() string { return strings.Join(f.deltas, "") }

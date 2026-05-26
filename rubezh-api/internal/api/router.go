@@ -27,11 +27,19 @@ type Deps struct {
 	SanitizerURL  string               // базовый URL сервиса rubezh-sanitizer
 	MappingCipher *crypto.Cipher       // AES-GCM для pseudonym_mappings; nil ⇒ mappings не пишутся (только для тестов)
 	Minio         *storage.MinioClient // MinIO для документов (Итерация 10); nil ⇒ /api/documents 503
+	// Embedder — реализация интерфейса llm.Embedder (Итерация 11 §Р2).
+	// nil ⇒ /api/search использует MockEmbedder{} (backward-compat для тестов).
+	Embedder llm.Embedder
 	// ReloadRouter — hot-reload LLM Router из БД (F2). nil ⇒ изменения
 	// провайдеров видны только после restart api (только для тестов).
 	ReloadRouter func(ctx context.Context) error
 	// OIDC — RP для браузерного входа (K.1); nil ⇒ OIDC выключен, только dev-login.
 	OIDC *OIDCAuth
+	// RAGEnabled — operator-level toggle для RAG в чате (Итерация 11
+	// MINOR-4). false ⇒ orchestrator НЕ получает Retriever (RAG никогда
+	// не запускается, даже при rag.enabled=true в запросе). Это
+	// дополнение к user-level toggle во фронте. Default — true.
+	RAGEnabled bool
 }
 
 // NewRouter собирает HTTP-роутер сервиса. Маршруты /api защищены
@@ -40,10 +48,25 @@ type Deps struct {
 // Возвращает (handler, orchestrator) — main.go вызывает orchestrator.Wait()
 // при graceful shutdown, чтобы дождаться фоновых auto-incident-горутин
 // (план iteration-9.md §Р4 + MAJOR-A финального ревью).
+//
+// FAIL-CLOSED: deps.Embedder == nil → panic (Итерация 11 §Р2: никаких
+// тихих деградаций к mock-embedder'у при misconfiguration main.go).
+// Тесты ОБЯЗАНЫ явно передать llm.MockEmbedder{} в Deps.
 func NewRouter(deps Deps) (http.Handler, *chat.Orchestrator) {
+	if deps.Embedder == nil {
+		panic("api.NewRouter: deps.Embedder обязателен " +
+			"(см. cmd/rubezh-api/main.go::buildEmbedder, env EMBEDDER_KIND)")
+	}
 	orchestrator := chat.NewOrchestrator(
 		sanitizer.NewClient(deps.SanitizerURL), deps.Router, deps.Store,
 		deps.MappingCipher)
+	// RAGEnabled (Итерация 11 MINOR-4): operator-level toggle. По умолчанию
+	// retriever всегда подключён; явное RAG_ENABLED=false полностью
+	// отключает retrieval даже при rag.enabled=true в запросе.
+	if deps.RAGEnabled {
+		orchestrator = orchestrator.WithRetriever(
+			chat.NewChatRetriever(deps.Embedder, deps.Store))
+	}
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -118,9 +141,13 @@ func NewRouter(deps Deps) (http.Handler, *chat.Orchestrator) {
 			deleteDocumentHandler(deps.Store, deps.Minio))
 		api.Post("/documents/{id}/retry",
 			retryDocumentHandler(deps.Store))
-		// RAG поиск — Итерация 11.
+		// RAG поиск — Итерация 11. Embedder уже валидирован выше
+		// (fail-closed panic при nil — никаких тихих деградаций).
+		// Rate-limit: 30 RPM на пользователя (план §Р6).
+		searchLimiter := NewUserRateLimiter(30, 5)
 		api.Post("/search", searchHandler(deps.Store,
-			sanitizer.NewClient(deps.SanitizerURL)))
+			sanitizer.NewClient(deps.SanitizerURL), deps.Embedder,
+			searchLimiter))
 	})
 	return r, orchestrator
 }

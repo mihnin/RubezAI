@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Send, Sparkles, AlertCircle, Paperclip, X } from "lucide-react";
+import { Send, Sparkles, AlertCircle, Paperclip, X, BookOpen } from "lucide-react";
 import { streamChat } from "../api/sse";
 import { apiFetch } from "../api/client";
 import { CloudGate } from "../components/CloudGate";
@@ -15,10 +15,12 @@ import {
   type ChatEvent,
   type ChatPreview,
   type Model,
+  type RagHitMeta,
 } from "../api/schemas";
 
 const STORAGE_PROVIDER = "rubezh.chat.provider";
 const STORAGE_MODEL = "rubezh.chat.model";
+const STORAGE_USE_RAG = "rubezh.chat.useRag";
 
 /** ChatPage. Реальный SSE — event: meta/delta/done/error (RFC 6202).
  *  Switcher провайдер+модель (state в localStorage). */
@@ -58,6 +60,14 @@ export default function ChatPage() {
   const [modelName, setModelName] = useState<string>(
     () => localStorage.getItem(STORAGE_MODEL) ?? "",
   );
+  // useRag — глобальный toggle «Искать по документам» (Итерация 11 §Р4 Ф5).
+  // Состояние сохраняется в localStorage, чтобы пережить reload и выбор сессии.
+  const [useRag, setUseRag] = useState<boolean>(
+    () => localStorage.getItem(STORAGE_USE_RAG) === "1",
+  );
+  useEffect(() => {
+    localStorage.setItem(STORAGE_USE_RAG, useRag ? "1" : "0");
+  }, [useRag]);
 
   // Если ещё ничего не выбрано или сохранённый провайдер пропал — берём первый.
   useEffect(() => {
@@ -159,6 +169,7 @@ export default function ChatPage() {
         provider: activeProvider!.name,
         model: modelName || activeProvider!.name,
         previewToken,
+        rag: useRag ? { enabled: true } : undefined,
         signal: ctrl.signal,
         onEvent: (ev) => applyEvent(ev, setMessages, setError),
       });
@@ -311,6 +322,26 @@ export default function ChatPage() {
         />
       )}
       <footer className="border-t border-slate-800 p-4 bg-slate-950">
+        <div className="max-w-4xl mx-auto mb-2 flex items-center gap-2 text-xs text-slate-400">
+          <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              role="switch"
+              aria-label="Искать по документам"
+              checked={useRag}
+              onChange={(e) => setUseRag(e.target.checked)}
+              className="accent-cyan-500"
+              data-testid="rag-toggle"
+            />
+            <BookOpen className="w-3.5 h-3.5" strokeWidth={2} />
+            <span>Искать по документам</span>
+          </label>
+          {useRag && (
+            <span className="text-slate-500">
+              · RAG включён, источники появятся под ответом
+            </span>
+          )}
+        </div>
         <div className="flex gap-2 max-w-4xl mx-auto items-stretch">
           <input
             ref={fileRef}
@@ -430,9 +461,19 @@ function applyEvent(
     if (ev.payload.assistant_message_id) {
       setMessages((m) => attachLastID(m, ev.payload.assistant_message_id));
     }
+  } else if (ev.type === "rag_hits") {
+    // Итерация 11 §Р4 Ф5: источники retrieval'а кладём на текущее
+    // assistant-сообщение, чтобы MessageBubble отрисовал их chip-list'ом.
+    setMessages((m) => attachLastRagHits(m, ev.payload.hits));
   } else if (ev.type === "error") {
     setError(`${ev.payload.message} (req=${ev.payload.request_id})`);
   }
+}
+
+function attachLastRagHits(list: Message[], hits: RagHitMeta[]): Message[] {
+  const last = list[list.length - 1];
+  if (!last || last.role !== "assistant") return list;
+  return [...list.slice(0, -1), { ...last, ragHits: hits }];
 }
 
 function attachLastID(list: Message[], id: string): Message[] {

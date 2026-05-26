@@ -3,7 +3,9 @@ import {
   ChatDeltaPayloadSchema,
   ChatDonePayloadSchema,
   ChatErrorPayloadSchema,
+  ChatRagHitsPayloadSchema,
   type ChatEvent,
+  type RagRequestParams,
 } from "./schemas";
 
 /**
@@ -27,6 +29,7 @@ export interface ChatStreamOptions {
   provider: string;
   model: string;
   previewToken?: string; // токен подтверждённого предпросмотра (J.0)
+  rag?: RagRequestParams; // RAG-параметры (Итерация 11 §Р4)
   onEvent: (event: ChatEvent) => void;
   signal?: AbortSignal;
 }
@@ -40,6 +43,7 @@ export async function streamChat(opts: ChatStreamOptions): Promise<void> {
   };
   if (opts.sessionId) body.session_id = opts.sessionId;
   if (opts.previewToken) body.preview_token = opts.previewToken;
+  if (opts.rag && opts.rag.enabled) body.rag = opts.rag;
 
   const resp = await fetch("/api/chat", {
     method: "POST",
@@ -100,6 +104,10 @@ function parseBlock(block: string): ChatEvent | null {
   if (name === "error") {
     const r = ChatErrorPayloadSchema.safeParse(json);
     return r.success ? { type: "error", payload: r.data } : null;
+  }
+  if (name === "rag_hits") {
+    const r = ChatRagHitsPayloadSchema.safeParse(json);
+    return r.success ? { type: "rag_hits", payload: r.data } : null;
   }
   return null;
 }

@@ -161,6 +161,119 @@ describe("ChatPage — reveal реальных данных (J.2)", () => {
   });
 });
 
+describe("ChatPage — RAG toggle + источники (Итерация 11 §Р4 Ф5)", () => {
+  beforeEach(() => localStorage.clear());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("toggle сохраняется в localStorage и передаёт rag.enabled=true в /api/chat", async () => {
+    let capturedChatBody: unknown = null;
+    const sse =
+      'event: meta\ndata: {"decision":"allow_raw","risk":{"level":"low","score":0,"classes":[]},"provider":"deepseek-cloud","reasons":[],"request_id":"r1"}\n\n' +
+      'event: rag_hits\ndata: {"request_id":"r1","hits":[{"document_id":"11111111-1111-1111-1111-111111111111","filename":"contract.txt","chunk_index":3,"relevance":0.91}]}\n\n' +
+      'event: delta\ndata: {"content":"Ответ"}\n\n' +
+      'event: done\ndata: {"request_id":"r1","assistant_message_id":"msg-1"}\n\n';
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url.endsWith("/api/models")) {
+          // делаем trusted_local чтобы не было гейта/preview (упрощает поток)
+          return Promise.resolve(
+            jsonResponse([model({ name: "local", trust_level: "trusted_local" })]),
+          );
+        }
+        if (url.endsWith("/api/chat/sessions") && method === "POST") {
+          return Promise.resolve(
+            jsonResponse({
+              id: "11111111-1111-1111-1111-111111111111",
+              user_id: "22222222-2222-2222-2222-222222222222",
+              title: "web-ui",
+              created_at: "2026-01-01T00:00:00Z",
+              updated_at: "2026-01-01T00:00:00Z",
+            }),
+          );
+        }
+        if (url.endsWith("/api/chat") && method === "POST") {
+          capturedChatBody = JSON.parse(String(init?.body));
+          return Promise.resolve(sseResponse(sse));
+        }
+        return Promise.resolve(jsonResponse({}));
+      }),
+    );
+
+    renderChat();
+    const toggle = await screen.findByTestId("rag-toggle"); // дождёмся UI
+    expect((toggle as HTMLInputElement).checked).toBe(false);
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(localStorage.getItem("rubezh.chat.useRag")).toBe("1"),
+    );
+
+    fireEvent.change(screen.getByLabelText("Сообщение"), {
+      target: { value: "что в договоре" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Сообщение"), { key: "Enter" });
+
+    await screen.findByText("Ответ");
+    const body = capturedChatBody as { rag?: { enabled: boolean } };
+    expect(body.rag).toEqual({ enabled: true });
+
+    // источники должны появиться в bubble
+    const sources = await screen.findByTestId("rag-sources");
+    expect(sources.textContent).toMatch(/contract\.txt/);
+    expect(sources.textContent).toMatch(/91%/);
+  });
+
+  it("без включённого toggle rag-параметры не уходят на сервер", async () => {
+    let capturedChatBody: unknown = null;
+    const sse =
+      'event: meta\ndata: {"decision":"allow_raw","risk":{"level":"low","score":0,"classes":[]},"provider":"local","reasons":[],"request_id":"r2"}\n\n' +
+      'event: delta\ndata: {"content":"ok"}\n\n' +
+      'event: done\ndata: {"request_id":"r2","assistant_message_id":"msg-2"}\n\n';
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url.endsWith("/api/models")) {
+          return Promise.resolve(
+            jsonResponse([model({ name: "local", trust_level: "trusted_local" })]),
+          );
+        }
+        if (url.endsWith("/api/chat/sessions") && method === "POST") {
+          return Promise.resolve(
+            jsonResponse({
+              id: "11111111-1111-1111-1111-111111111111",
+              user_id: "22222222-2222-2222-2222-222222222222",
+              title: "web-ui",
+              created_at: "2026-01-01T00:00:00Z",
+              updated_at: "2026-01-01T00:00:00Z",
+            }),
+          );
+        }
+        if (url.endsWith("/api/chat") && method === "POST") {
+          capturedChatBody = JSON.parse(String(init?.body));
+          return Promise.resolve(sseResponse(sse));
+        }
+        return Promise.resolve(jsonResponse({}));
+      }),
+    );
+
+    renderChat();
+    await screen.findByTestId("rag-toggle"); // дождёмся UI
+    fireEvent.change(screen.getByLabelText("Сообщение"), {
+      target: { value: "вопрос" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Сообщение"), { key: "Enter" });
+    await screen.findByText("ok");
+
+    const body = capturedChatBody as Record<string, unknown>;
+    expect(body.rag).toBeUndefined();
+  });
+});
+
 describe("ChatPage — provider/model picker (G.2c)", () => {
   beforeEach(() => localStorage.clear());
   afterEach(() => vi.restoreAllMocks());

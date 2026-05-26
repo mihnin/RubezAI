@@ -126,6 +126,18 @@ services:
       OIDC_FRONTEND_URL: ${OIDC_FRONTEND_URL:-http://localhost:5173}
       OIDC_ROLE_CLAIM: ${OIDC_ROLE_CLAIM:-}
       OIDC_ROLE_MAP: ${OIDC_ROLE_MAP:-}
+      # Embedder (Итерация 11 §Р2). Симметрия с rubezh-worker обязательна.
+      EMBEDDER_KIND: ${EMBEDDER_KIND:-mock}
+      EMBEDDER_URL: ${EMBEDDER_URL:-}
+      EMBEDDER_MODEL: ${EMBEDDER_MODEL:-}
+      EMBEDDER_API_KEY: ${EMBEDDER_API_KEY:-}
+      EMBEDDER_TIMEOUT_SECONDS: ${EMBEDDER_TIMEOUT_SECONDS:-30}
+      # Operator-level RAG-toggle (Итерация 11 MINOR-4). Default — true.
+      # RAG_ENABLED=false полностью отключает retrieval в orchestrator.
+      RAG_ENABLED: ${RAG_ENABLED:-true}
+    extra_hosts:
+      # позволяет EMBEDDER_URL=http://host.docker.internal:1234 (LM Studio).
+      - "host.docker.internal:host-gateway"
     ports:
       - "${API_PORT:-8080}:8080"
     depends_on:
@@ -155,6 +167,14 @@ services:
       MINIO_BUCKET: ${MINIO_BUCKET:-rubezh-documents}
       MINIO_SECURE: "false"
       SANITIZER_URL: http://rubezh-sanitizer:8001
+      # Embedder — симметрия с rubezh-api (Итерация 11 §Р2).
+      EMBEDDER_KIND: ${EMBEDDER_KIND:-mock}
+      EMBEDDER_URL: ${EMBEDDER_URL:-}
+      EMBEDDER_MODEL: ${EMBEDDER_MODEL:-}
+      EMBEDDER_API_KEY: ${EMBEDDER_API_KEY:-}
+      EMBEDDER_TIMEOUT_SECONDS: ${EMBEDDER_TIMEOUT_SECONDS:-30}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8002:8002"
     depends_on:

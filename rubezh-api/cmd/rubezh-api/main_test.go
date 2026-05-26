@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rubezh-ai/rubezh-api/internal/config"
 	"github.com/rubezh-ai/rubezh-api/internal/llm"
 	"github.com/rubezh-ai/rubezh-api/internal/storage"
 )
@@ -99,6 +100,69 @@ func TestBuildRouterUnknownAdapterFallsBackToMock(t *testing.T) {
 		llm.ChatRequest{Messages: []llm.ChatMessage{{Role: "user", Content: "q"}}})
 	if !strings.Contains(resp.Content, "[mock]") {
 		t.Errorf("неизвестный адаптер должен давать mock, получено %q", resp.Content)
+	}
+}
+
+func TestBuildEmbedderDefaultsToMock(t *testing.T) {
+	cases := []config.EmbedderConfig{
+		{Kind: ""},
+		{Kind: "mock"},
+	}
+	for _, c := range cases {
+		e, err := buildEmbedder(c)
+		if err != nil {
+			t.Fatalf("kind=%q: %v", c.Kind, err)
+		}
+		if e.Name() != "mock-sha256-v1" {
+			t.Errorf("kind=%q: name=%q", c.Kind, e.Name())
+		}
+		if e.Dim() != llm.EmbeddingDim {
+			t.Errorf("kind=%q: dim=%d", c.Kind, e.Dim())
+		}
+	}
+}
+
+func TestBuildEmbedderOpenAICompatible(t *testing.T) {
+	e, err := buildEmbedder(config.EmbedderConfig{
+		Kind: "openai_compatible", URL: "http://lm:1234",
+		Model: "bge-m3", APIKey: "sk", Timeout: 10,
+	})
+	if err != nil {
+		t.Fatalf("buildEmbedder: %v", err)
+	}
+	if e.Name() != "bge-m3" {
+		t.Errorf("name = %q", e.Name())
+	}
+}
+
+func TestBuildEmbedderRejectsOpenAIWithoutURL(t *testing.T) {
+	_, err := buildEmbedder(config.EmbedderConfig{
+		Kind: "openai_compatible", Model: "m", Timeout: 5,
+	})
+	if err == nil {
+		t.Fatal("ожидалась ошибка при пустом URL")
+	}
+	if !strings.Contains(err.Error(), "EMBEDDER_URL") {
+		t.Errorf("ошибка должна упоминать EMBEDDER_URL: %v", err)
+	}
+}
+
+func TestBuildEmbedderRejectsOpenAIWithoutModel(t *testing.T) {
+	_, err := buildEmbedder(config.EmbedderConfig{
+		Kind: "openai_compatible", URL: "http://x", Timeout: 5,
+	})
+	if err == nil {
+		t.Fatal("ожидалась ошибка при пустой Model")
+	}
+	if !strings.Contains(err.Error(), "EMBEDDER_MODEL") {
+		t.Errorf("ошибка должна упоминать EMBEDDER_MODEL: %v", err)
+	}
+}
+
+func TestBuildEmbedderRejectsUnknownKind(t *testing.T) {
+	_, err := buildEmbedder(config.EmbedderConfig{Kind: "future-kind"})
+	if err == nil {
+		t.Fatal("ожидалась ошибка для unknown kind")
 	}
 }
 

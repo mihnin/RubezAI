@@ -7,10 +7,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/rubezh-ai/rubezh-api/internal/llm"
 )
 
 func testRouter() http.Handler {
-	h, _ := NewRouter(Deps{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	h, _ := NewRouter(Deps{
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Embedder: llm.MockEmbedder{},
+	})
 	return h
 }
 

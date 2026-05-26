@@ -16,6 +16,8 @@ func clearEnv(t *testing.T) {
 		"API_PORT", "API_LOG_LEVEL", "DATABASE_URL", "SANITIZER_URL",
 		"POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_HOST",
 		"POSTGRES_PORT", "POSTGRES_DB",
+		"EMBEDDER_KIND", "EMBEDDER_URL", "EMBEDDER_MODEL",
+		"EMBEDDER_API_KEY", "EMBEDDER_TIMEOUT_SECONDS",
 	} {
 		t.Setenv(key, "")
 	}
@@ -159,5 +161,73 @@ func TestLoadDecodesValidMappingKey(t *testing.T) {
 	if len(cfg.MappingEncryptionKey) != 32 {
 		t.Errorf("длина ключа = %d, ожидалось 32",
 			len(cfg.MappingEncryptionKey))
+	}
+}
+
+func TestLoadEmbedderDefaultsToMock(t *testing.T) {
+	clearEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Embedder.Kind != "mock" {
+		t.Errorf("Kind = %q, ожидалось mock", cfg.Embedder.Kind)
+	}
+	if cfg.Embedder.Timeout != 30 {
+		t.Errorf("Timeout = %d, ожидалось 30", cfg.Embedder.Timeout)
+	}
+}
+
+func TestLoadEmbedderOpenAICompatible(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("EMBEDDER_KIND", "openai_compatible")
+	t.Setenv("EMBEDDER_URL", "http://lm:1234")
+	t.Setenv("EMBEDDER_MODEL", "bge-m3")
+	t.Setenv("EMBEDDER_API_KEY", "sk")
+	t.Setenv("EMBEDDER_TIMEOUT_SECONDS", "15")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Embedder.Kind != "openai_compatible" {
+		t.Errorf("Kind = %q", cfg.Embedder.Kind)
+	}
+	if cfg.Embedder.URL != "http://lm:1234" {
+		t.Errorf("URL = %q", cfg.Embedder.URL)
+	}
+	if cfg.Embedder.Model != "bge-m3" {
+		t.Errorf("Model = %q", cfg.Embedder.Model)
+	}
+	if cfg.Embedder.APIKey != "sk" {
+		t.Errorf("APIKey = %q", cfg.Embedder.APIKey)
+	}
+	if cfg.Embedder.Timeout != 15 {
+		t.Errorf("Timeout = %d", cfg.Embedder.Timeout)
+	}
+}
+
+func TestParseIntEnvFallbackOnInvalid(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("EMBEDDER_TIMEOUT_SECONDS", "not-a-number")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Embedder.Timeout != 30 {
+		t.Errorf("Timeout = %d, ожидался fallback 30", cfg.Embedder.Timeout)
+	}
+}
+
+func TestParseIntEnvFallbackOnZeroOrNegative(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("EMBEDDER_TIMEOUT_SECONDS", "0")
+	cfg, _ := Load()
+	if cfg.Embedder.Timeout != 30 {
+		t.Errorf("0 → fallback 30, got %d", cfg.Embedder.Timeout)
+	}
+	t.Setenv("EMBEDDER_TIMEOUT_SECONDS", "-5")
+	cfg, _ = Load()
+	if cfg.Embedder.Timeout != 30 {
+		t.Errorf("-5 → fallback 30, got %d", cfg.Embedder.Timeout)
 	}
 }

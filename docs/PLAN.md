@@ -219,32 +219,109 @@
 - **Тесты:** worker ~27 unit/integration green; Go-стороне 10 пакетов green; docker compose worker healthy.
 - **Архитектор:** ревью 1 — 9.7/10 (m1 неполный read upload, m2 orphan-MinIO при сбое CreateDocument); фикс — `+5` строк io.ReadAll + LimitReader + Remove в ветке ошибки. **Итог: 10/10 ✅.**
 
-### ☐ Итерация 11 — Базовый RAG
+### ◐ Итерация 11 — Базовый RAG (Ф0+Ф1 закрыты, Ф2–Ф5 в работе)
 
 - **Цель:** поиск по `pgvector` с учётом ACL.
-- **Тесты:** тест ACL-фильтрации результатов.
+- **Ф4a ✅ (2026-05-26):** `internal/chat/rag.go` — `Retriever` interface,
+  `ChatRetriever`, `BuildRAGSystemPrompt` (delimitered `<rag_source>` блоки +
+  директива анти-injection), `escapeRAGContent` (control-tokens escape),
+  `DetectSuspiciousPattern` (en/ru regex), `FilterHighRiskForExternal`
+  (high/critical drop для external-LLM), `stripSourceEchoes` (post-LLM
+  regex strip эхо-тегов), `TruncateByBudget`. **24/24 unit-тестов** зелёные.
+  Самооценка 9.5/10 (ревью архитектора Ф4a отложено — Ф4b/Ф4c интеграция
+  в orchestrator тестируется в составе общего Ф4).
+- **Ф3 ✅ Принято 9.5/10 (2026-05-26):** `internal/api/ratelimit.go`
+  (UserRateLimiter token-bucket per user, 30 RPM/burst 5, audit
+  `rate_limit_exceeded` one-per-window); расширенный `searchHandler`
+  (валидация query 1..2000 рун, audit `search_performed` с
+  `top_document_ids/chunk_ids/scores_summary/rag_mode/latency_ms/embedder_model`,
+  audit `acl_violation_attempt` через `storage.FilterAccessibleDocuments` —
+  диагностика BLOCKER B1 без false-positive при limit clamp);
+  `docs/contracts/rag.schema.json` (новый); расширение `audit.schema.json`
+  на 7 новых event_types. **7 unit + 11 handler** тестов зелёные.
+  Ревью архитектора: 8.5 → 9.5/10 ПРИНЯТО после доработки P0 (false-positive)
+  + P1 (matrix-тест ACL). Техдолг: P2 (golden contract против
+  rag.schema.json), P3 (fuzz audit-grep с escape).
+- **Ф2 ✅ Принято 10/10 (2026-05-26):** обновлённый `SearchChunks` —
+  обязательный `embedderName` (fail-closed `ErrEmbedderNameRequired`,
+  §Р9), документIDs filter поверх ACL (BLOCKER B1), snippet truncation
+  512 рун UTF-8 safe, JOIN sanitization_results для risk_level. Миграция
+  000016 — композитный индекс `idx_sanitization_results_doc_created`.
+  Updated `search.go` handler. **5 unit (truncateRunes) + 14 integration**
+  тестов с живой БД. Per-test уникальная ось в 1024-векторе через FNV-1a
+  hash от prefix — защита от поллюции dev-БД. Ревью архитектора: 9/10 →
+  **10/10** после доводки (миграция, fuzz-тест от B1, комментарий-якорь
+  про FNV, fail-closed embedderName).
+- **Ф1 ✅ Принято 10/10 (2026-05-26):** интерфейс `llm.Embedder`
+  (`Embed`/`Name`/`Dim`); `OpenAICompatibleEmbedder` (LM Studio /
+  vLLM / Ollama, fail-closed на dim≠1024/5xx/empty/context cancel);
+  фабрики `cmd/rubezh-api/main.go::buildEmbedder` + Python
+  `app.embeddings.build_embedder`; env `EMBEDDER_KIND/URL/MODEL/API_KEY/
+  TIMEOUT_SECONDS`; cross-language symmetry test (golden 16 компонент
+  идентичны байт-в-байт между Go и Python); `Deps.Embedder` —
+  **обязательное** поле (fail-closed panic в `NewRouter` при nil,
+  никаких тихих деградаций). 30 новых тестов (Go+Python), все зелёные.
+  **Bug Ф0 пойман и пофикшен:** делитель MockEmbedder был `2^32-1`,
+  Python — `2^32` → векторы жили в разных пространствах; cross-language
+  ranking был бы бесполезен. Симметрия восстановлена. CHANGELOG.md
+  создан с разделом Breaking + SQL для миграции dev-БД. Ревью
+  архитектора: 9/10 → 10/10 после доводки (убран nil-fallback,
+  добавлен CHANGELOG).
+- **Ф0 уже в коде (зафиксировано аудитом 2026-05-26):**
+  `internal/storage/search.go` (`SearchChunks` c ACL-фильтром в SQL для
+  не-supervisor); `internal/api/search.go` (`POST /api/search`, sanitize
+  query, embed, audit `search_performed`); `internal/llm/embedder.go`
+  (`MockEmbedder` SHA-256 dim=1024, бинарно-совместим с
+  `rubezh-worker/app/embeddings/mock.py`); миграция `000004` уже
+  включает `embeddings vector(1024)` + HNSW-индекс
+  `idx_embeddings_vector USING hnsw (embedding vector_cosine_ops)`.
+- **План v2.2 — `docs/design/iteration-11-rag.md`** (заменяет v1
+  `iteration-11.md`, помечен superseded). Доводит до полного DoD:
+  реальный embedder через DI (Ф1), ACL/snippet/embedder-name guard
+  regression-тесты на storage (Ф2), `/api/search` обвязка — rate-limit
+  + расширенный audit + контракт `rag.schema.json` (Ф3), интеграция в
+  chat orchestrator за явным флагом `rag.enabled` + policy-revision
+  после retrieval + post-LLM strip RAG-source-эха (Ф4), frontend toggle
+  + источники в MessageBubble (Ф5).
+- **История ревью плана:**
+  - v2 — самооценка 9.5/10; независимое ревью архитектора **8.5/10**:
+    BLOCKER B1 (ACL bypass через `document_ids`), MAJOR M1
+    (prompt-injection через содержимое чанков), MAJOR M2 (DoS через
+    policy revision), MAJOR M3 (rate-limit bypass через restart),
+    MAJOR M4 (audit-схема), 7 MINOR.
+  - v2.1 — закрытие B1 + M1–M4 + m4-m7 (14 новых DoD/тестов).
+    Самооценка 9.7/10; ревью **9.6/10 ПРИНЯТО**, 3 MINOR (m8 post-LLM
+    strip, m9 XML rationale, m10 sync.Map GC) → v2.2.
+  - v2.2 — закрытие m8 (`stripSourceEchoes` + D14), m9, m10.
+    Самооценка **10/10**, **архитектор разрешил старт Ф1**.
+- **Закрывает критерий:** «поиск по pgvector с учётом ACL» из карты MVP.
 
-### ☐ Итерация 12 — Frontend: каркас
+### ~~Итерация 12 — Frontend: каркас~~ ✅ Закрыта де-факто (внутри G.1)
 
 - **Цель:** Vite, роутинг (React Router v7), API-клиенты + Zod-типы, TanStack Query, auth-контекст, ESLint/Prettier.
-- **Файлы:** `rubezh-web/`, `package.json`, `package-lock.json`.
-- **Тесты:** Vitest + RTL — smoke-тесты каркаса.
-- **Закрывает критерии:** 2.
+- **Реализовано:** `rubezh-web/` (Vite 6 + React 19 + RR v7 + TanStack Query + Tailwind v4); `api/{client,schemas,sse}.ts`; auth-контекст; 9 страниц (см. Итерации 13–15). Контракт Go↔Zod проверяется автоматом — G.1 (`contract.test.ts` + golden-фикстуры).
+- **Тесты (Vitest + RTL):** `schemas.test.ts`, `sse.test.ts`, `client.test.ts`, `LoginPage.test.tsx`, `contract.test.ts` (G.1).
+- **Закрывает критерий:** 2.
+- **Замечание:** формального отдельного ревью архитектора по самой итерации 12 не было — каркас закрылся попутно в G.1 (`contract.test.ts` + CI-джоба `web`). Дальнейшие правки фронта проходили ревью в составе J/K/L.
 
-### ☐ Итерация 13 — Frontend: экран Chat
+### ~~Итерация 13 — Frontend: экран Chat~~ ✅ Закрыта де-факто (внутри J)
 
 - **Цель:** ввод, загрузка файла, выбор модели, индикатор политики, предпросмотр обезличивания, SSE-стрим.
-- **Тесты:** компонент-тесты индикатора политики и предпросмотра.
+- **Реализовано:** `pages/ChatPage.tsx` + RTL-тесты (`ChatPage.test.tsx`): SSE-стрим, picker cloud/local (J.4), CloudGate-диалог предпросмотра по `preview_token` (J.1/J.2), кнопка «Показать реальные данные» (J.2 reveal), attach документа в чат (J.3).
+- **Архитектор:** ревью прошло как часть фазы J (`docs/design/chat-pii-flow.md` v2, все MAJOR закрыты).
+- **Закрывает критерий:** 5 (в части UX).
 
-### ☐ Итерация 14 — Frontend: Documents и Policies
+### ~~Итерация 14 — Frontend: Documents и Policies~~ ✅ Закрыта де-факто
 
 - **Цель:** экраны списка документов и управления политиками с тестом политики.
-- **Тесты:** компонент-тесты экранов.
+- **Реализовано:** `pages/DocumentsPage.tsx` (статусы, скачать оригинал / обезличенную версию — J.3), `pages/PoliciesPage.tsx`.
+- **Тесты:** компонент-тесты в составе G.2/J; контракты Documents/Policies проверены G.1.
 
-### ☐ Итерация 15 — Frontend: Models, Audit Log, Incidents
+### ~~Итерация 15 — Frontend: Models, Audit Log, Incidents~~ ✅ Закрыта де-факто (внутри G.2)
 
 - **Цель:** экраны провайдеров, журнала аудита, инцидентов с карточкой расследования.
-- **Тесты:** компонент-тесты экранов.
+- **Реализовано:** `pages/{ModelsPage,AuditLogPage,IncidentsPage}.tsx` + RTL-тесты `ModelsPage.test.tsx` (toggle/delete), `IncidentsPage.test.tsx` (If-Match, ResolutionDialog, 412).
+- **Архитектор:** ревью прошло в составе G.2.
 
 ### ☐ Итерация 16 — Интеграция и финализация
 
@@ -292,7 +369,7 @@
 - **G.2c:** UI toggle/delete в ModelsPage + RTL-тесты ModelsPage (3),
   IncidentsPage (3: If-Match, ResolutionDialog, 412), ChatPage (2: picker).
 
-### ◐ Итерация J — Чат с контролируемым выводом ПДн за контур
+### ~~Итерация J — Чат с контролируемым выводом ПДн за контур~~ ✅ Закрыта
 
 План — `docs/design/chat-pii-flow.md` (ревью архитектора 7.5→v2, все MAJOR
 закрыты). Реализовано и протестировано:
@@ -311,11 +388,6 @@
   (.txt из sanitized-чанков) + кнопки в DocumentsPage.
 - **Дизайн:** визуальный макет (PNG, рендер прототипа) + HTML-прототип +
   UX-спека. Stitch-макеты — после перезапуска CC.
-
-**Осталось (J.3 «документ в чате»):** attach документа прямо в чат с прогоном
-его текста через тот же sanitize→gate→LLM. Требует решения: источник текста —
-переиспользовать существующий sanitization_result документа (с его mappings) vs
-ре-парсить raw из MinIO. Вынесено в отдельный шаг (см. design-doc §J.3, MINOR-2).
 
 ---
 
@@ -373,6 +445,44 @@
   toast + «Перешифровать api-key» в меню), 3 новых State (403,
   key-encrypt-failed, key-broken). После Итерации 9.5 backend RBAC
   и fail-closed теперь имеют UX-отражение.
+
+**Открыто (на 2026-05-26):**
+
+- **Stitch-макеты к Итерации J.** Перенесены из секции J — после
+  перезапуска CC; не блокирует MVP (HTML-прототип + PNG-рендер есть).
+
+- **RAG UX: deep-link с chip → конкретный chunk документа** (пост-MVP).
+  SSE `rag_hits` сейчас несёт только метаданные; чтобы пользователь
+  мог раскрыть полное содержимое источника, фронт должен делать
+  `GET /api/documents/:id/chunks` с навигацией по `chunk_index`.
+  В Итерации 11 Ф5 chip-list реализован без deep-link'а (только
+  filename + relevance в tooltip). Зафиксировано как scope-cut
+  ревью архитектора Итерации 11 (Q7).
+
+- **RAG: интеграционный автотест `TestEndToEnd_PythonEmbedGoSearch`**
+  (пост-MVP). Сейчас регресс ABI Go↔Python embedder'ов защищён:
+  (1) golden 16 компонент в `internal/llm/mock_symmetry_test.go` ≡
+  `rubezh-worker/tests/test_embeddings.py::GOLDEN_HELLO_FIRST16`,
+  (2) одноразовый e2e через docker-compose в Итерации 16. Полный
+  автотест с testcontainers-go отложен как over-engineering для
+  on-prem MVP. Scope-cut ревью архитектора Итерации 11 (Q8).
+
+**~~Закрыто 2026-05-26:~~**
+
+- ~~**Поллюция dev-БД интеграционными тестами.**~~ → реализован пакет
+  `internal/testdb` с `Cleanup(dsn, prefixes)` + `TestNameUnique(t, kind)`.
+  Каждый `go test`-процесс получает собственный префикс `itest_<pid>_`;
+  глобальный `TestMain` в пакетах `storage` и `api` после `m.Run()`
+  чистит свой pid + legacy-префиксы. Защита от prod-БД: host-allowlist
+  (`postgres`, `localhost`, `127.0.0.1`, `::1`, `db`) + env-override
+  `TESTDB_ALLOW_HOST`. `model_providers` soft-disable (FK от
+  append-only `audit_events`); `policies` DELETE; `user_provider_credentials`
+  DELETE до model_providers. Ревью архитектора 1 — 7/10 (3 MAJOR);
+  ревью 2 — **9.5/10 ПРИНЯТО**; доводка до **10/10** (env-override
+  TESTDB_ALLOW_HOST + KNOWN LIMITATION про k8s short-hostnames в
+  комментариях). KNOWN LIMITATION: имена `postgres`/`db` могут
+  совпадать с k8s-Service short-name — при появлении k8s-staging
+  сузить allowlist через `TESTDB_ALLOW_HOST` override.
 
 Новые пункты добавляются сюда по мере появления из ревью.
 

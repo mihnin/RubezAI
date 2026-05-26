@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/rubezh-ai/rubezh-api/internal/auth"
+	"github.com/rubezh-ai/rubezh-api/internal/llm"
 	"github.com/rubezh-ai/rubezh-api/internal/storage"
 )
 
@@ -24,6 +25,7 @@ func fullTestRouter(t *testing.T) (http.Handler, *storage.Storage, func()) {
 		Store:        store,
 		AuthSecret:   apiTestSecret,
 		SanitizerURL: "http://disabled",
+		Embedder:     llm.MockEmbedder{},
 	})
 	return router, store, closeStore
 }

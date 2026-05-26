@@ -41,6 +41,12 @@ type EventSink interface {
 	// ассистента (для последующего reveal); пуст для путей без записи.
 	Done(requestID, assistantMessageID string) error
 	Fail(message, requestID string) error
+	// RagHits — метаданные источников retrieval'а (Итерация 11 §Р4 Ф4c).
+	// Эмитится между Meta и первым Delta, если RAG включён и нашлись чанки.
+	// snippet'ы НЕ отправляются (они уходят только в LLM-context); только
+	// document_id / filename / chunk_index / relevance. Контракт —
+	// docs/contracts/rag.schema.json#RagHitMeta.
+	RagHits(requestID string, hits []RAGHit) error
 }
 
 // Request — подготовленный HTTP-слоем запрос чата: сессия, провайдер и
@@ -61,6 +67,10 @@ type Request struct {
 	// APIKeyOverride — персональный ключ пользователя к провайдеру (L); если
 	// непуст, LLM вызывается с ним вместо org-ключа.
 	APIKeyOverride string
+	// RAG — параметры retrieval'а (Итерация 11 §Р4). nil или Enabled=false
+	// → старое поведение без retrieval'а; при наличии — Stream врезает
+	// шаги retrieval / risk-filter / policy re-evaluation между Meta и LLM.
+	RAG *RAGParams
 }
 
 // RiskView — оценка риска для SSE-события meta.

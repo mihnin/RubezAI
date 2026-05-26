@@ -49,3 +49,28 @@ def test_mock_embedder_satisfies_protocol() -> None:
     from app.embeddings import Embedder, MockEmbedder
 
     assert isinstance(MockEmbedder(), Embedder)
+
+
+# КРИТИЧНО: эти 16 чисел ОБЯЗАНЫ совпасть байт-в-байт с Go-выводом
+# `MockEmbedder{}.Embed(ctx, "hello")[0:16]` (см.
+# rubezh-api/internal/llm/mock_symmetry_test.go::goldenMockHelloFirst16).
+# Если значения расходятся — symmetry между worker (doc-embed) и API
+# (query-embed) нарушена; cosine ranking бесполезен.
+GOLDEN_HELLO_FIRST16 = [
+    0.2631225130, -0.5483201705, -0.0798793016, -0.0238901642,
+    -0.7237447212, 0.7819415610, 0.9577826294, 0.4705865914,
+    0.8632575544, 0.8213765537, 0.1766301035, 0.3797996584,
+    0.0702516143, -0.8193402956, -0.4320218465, 0.2311942987,
+]
+
+
+def test_mock_embedder_golden_for_hello() -> None:
+    """Cross-language symmetry guard (план Итерации 11 §Р2)."""
+    from app.embeddings import MockEmbedder
+
+    v = MockEmbedder().embed("hello")
+    for i, want in enumerate(GOLDEN_HELLO_FIRST16):
+        assert abs(v[i] - want) < 1e-6, (
+            f"симметрия Python↔Go сломана на индексе {i}: "
+            f"got={v[i]} want={want}"
+        )

@@ -25,6 +25,24 @@
         "preview_token": {
           "type": ["string", "null"],
           "description": "Одноразовый токен из POST /api/chat/preview (J.0): бэкенд переиспользует тот sanitize — гарантия, что отправлен ровно подтверждённый обезличенный текст"
+        },
+        "rag": {
+          "type": ["object", "null"],
+          "description": "Параметры RAG-retrieval'а (Итерация 11 §Р4); ref docs/contracts/rag.schema.json#RagRequestParams. null/отсутствие — старое поведение без retrieval'а.",
+          "additionalProperties": false,
+          "required": ["enabled"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "document_ids": {
+              "type": ["array", "null"],
+              "items": { "type": "string", "format": "uuid" }
+            },
+            "top_k": {
+              "type": ["integer", "null"],
+              "minimum": 1,
+              "maximum": 10
+            }
+          }
         }
       }
     },
@@ -176,6 +194,29 @@
       "properties": {
         "message": { "type": "string" },
         "request_id": { "type": "string" }
+      }
+    },
+    "SseRagHits": {
+      "type": "object",
+      "description": "payload события rag_hits — метаданные источников retrieval'а (Итерация 11 §Р4 Ф4c). Эмитится между meta и первым delta при включённом RAG и непустом результате. snippet НЕ передаётся (он уходит только в LLM-context). Контракт hit — rag.schema.json#RagHitMeta.",
+      "additionalProperties": false,
+      "required": ["request_id", "hits"],
+      "properties": {
+        "request_id": { "type": "string" },
+        "hits": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["document_id", "filename", "chunk_index", "relevance"],
+            "properties": {
+              "document_id": { "type": "string", "format": "uuid" },
+              "filename":    { "type": "string" },
+              "chunk_index": { "type": "integer", "minimum": 0 },
+              "relevance":   { "type": "number" }
+            }
+          }
+        }
       }
     }
   }

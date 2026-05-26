@@ -34,7 +34,27 @@ type Config struct {
 	MinioSecretKey       string
 	MinioBucket          string
 	MinioSecure          bool
+	Embedder             EmbedderConfig
 	OIDC                 OIDCConfig
+	// RAGEnabled — operator-level toggle для RAG в чате (Итерация 11
+	// MINOR-4). Default true. false ⇒ retriever не подключается в
+	// orchestrator: даже если клиент пришлёт rag.enabled=true, RAG-конвейер
+	// не запускается. Используется для on-prem развёртываний, где
+	// retrieval должен быть полностью выключен.
+	RAGEnabled bool
+}
+
+// EmbedderConfig — конфигурация Embedder'а (Итерация 11 §Р2).
+// Kind: "mock" (default) | "openai_compatible".
+// URL/Model обязательны при Kind=openai_compatible (иначе сервис
+// падает на старте — fail-closed; нельзя молча скатиться к mock и
+// порвать симметрию с worker).
+type EmbedderConfig struct {
+	Kind    string // EMBEDDER_KIND
+	URL     string // EMBEDDER_URL (base, без /v1/embeddings)
+	Model   string // EMBEDDER_MODEL (имя модели; пишется в embeddings.model)
+	APIKey  string // EMBEDDER_API_KEY (опц.; пусто → без Authorization)
+	Timeout int    // EMBEDDER_TIMEOUT_SECONDS (default 30)
 }
 
 // OIDCConfig — параметры OIDC Relying Party (K.1). Пустой Issuer/ClientID/
@@ -75,6 +95,13 @@ func Load() (Config, error) {
 		MinioSecretKey:       os.Getenv("MINIO_ROOT_PASSWORD"),
 		MinioBucket:          getEnv("MINIO_BUCKET", "rubezh-documents"),
 		MinioSecure:          os.Getenv("MINIO_SECURE") == "true",
+		Embedder: EmbedderConfig{
+			Kind:    getEnv("EMBEDDER_KIND", "mock"),
+			URL:     os.Getenv("EMBEDDER_URL"),
+			Model:   os.Getenv("EMBEDDER_MODEL"),
+			APIKey:  os.Getenv("EMBEDDER_API_KEY"),
+			Timeout: parseIntEnv("EMBEDDER_TIMEOUT_SECONDS", 30),
+		},
 		OIDC: OIDCConfig{
 			Issuer:       os.Getenv("OIDC_ISSUER"),
 			ClientID:     os.Getenv("OIDC_CLIENT_ID"),
@@ -84,6 +111,9 @@ func Load() (Config, error) {
 			RoleClaim:    os.Getenv("OIDC_ROLE_CLAIM"),
 			RoleMap:      parseRoleMap(os.Getenv("OIDC_ROLE_MAP")),
 		},
+		// RAG_ENABLED — only "false" / "0" disables; всё прочее (включая
+		// отсутствие env) = true (default-on, удобный для on-prem MVP).
+		RAGEnabled: os.Getenv("RAG_ENABLED") != "false" && os.Getenv("RAG_ENABLED") != "0",
 	}
 	if cfg.AuthSecret == "" {
 		return Config{}, fmt.Errorf("config: переменная AUTH_DEV_TOKEN_SECRET обязательна")
@@ -139,4 +169,19 @@ func getEnv(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// parseIntEnv возвращает int из env или fallback при пустой/невалидной
+// строке. Не падает на ошибке — только при заведомо обязательных env
+// (которые проверяются явно в Load).
+func parseIntEnv(key string, fallback int) int {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback
+	}
+	var n int
+	if _, err := fmt.Sscanf(raw, "%d", &n); err != nil || n <= 0 {
+		return fallback
+	}
+	return n
 }

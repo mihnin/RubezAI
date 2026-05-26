@@ -50,6 +50,17 @@ type chatRequestDTO struct {
 	// PreviewToken — токен из POST /api/chat/preview (J.0); если задан,
 	// бэкенд переиспользует тот sanitize (гарантия идентичности текста).
 	PreviewToken *string `json:"preview_token"`
+	// RAG — параметры retrieval'а (Итерация 11 §Р4 Ф4c). nil или
+	// enabled=false → старое поведение без RAG.
+	RAG *chatRAGParamsDTO `json:"rag,omitempty"`
+}
+
+// chatRAGParamsDTO — DTO для поля rag в /api/chat
+// (контракт rag.schema.json#RagRequestParams).
+type chatRAGParamsDTO struct {
+	Enabled     bool     `json:"enabled"`
+	DocumentIDs []string `json:"document_ids,omitempty"`
+	TopK        int      `json:"top_k,omitempty"`
 }
 
 // chatPreviewRequestDTO — тело POST /api/chat/preview (J.1).
@@ -122,6 +133,22 @@ type sseDonePayload struct {
 type sseErrorPayload struct {
 	Message   string `json:"message"`
 	RequestID string `json:"request_id"`
+}
+
+// sseRagHitPayload — один источник в SSE event rag_hits (Итерация 11 §Р4
+// Ф4c, контракт rag.schema.json#RagHitMeta). snippet не передаётся — он
+// уходит только в LLM-context; во фронт идут только метаданные источника.
+type sseRagHitPayload struct {
+	DocumentID string  `json:"document_id"`
+	Filename   string  `json:"filename"`
+	ChunkIndex int     `json:"chunk_index"`
+	Relevance  float64 `json:"relevance"`
+}
+
+// sseRagHitsPayload — payload события rag_hits.
+type sseRagHitsPayload struct {
+	RequestID string             `json:"request_id"`
+	Hits      []sseRagHitPayload `json:"hits"`
 }
 
 // validate проверяет тело /api/chat против контракта.
@@ -219,6 +246,24 @@ func (s *sseSink) Done(requestID, assistantMessageID string) error {
 func (s *sseSink) Fail(message, requestID string) error {
 	return s.writeEvent("error", sseErrorPayload{
 		Message: message, RequestID: requestID,
+	})
+}
+
+// RagHits — SSE event rag_hits (Итерация 11 §Р4 Ф4c).
+// Эмитится между meta и первым delta при RAG-retrieval'е; snippet'ы
+// НЕ сериализуются (они уходят только в LLM-context).
+func (s *sseSink) RagHits(requestID string, hits []chat.RAGHit) error {
+	out := make([]sseRagHitPayload, 0, len(hits))
+	for _, h := range hits {
+		out = append(out, sseRagHitPayload{
+			DocumentID: h.DocumentID,
+			Filename:   h.Filename,
+			ChunkIndex: h.ChunkIndex,
+			Relevance:  h.Relevance,
+		})
+	}
+	return s.writeEvent("rag_hits", sseRagHitsPayload{
+		RequestID: requestID, Hits: out,
 	})
 }
 
@@ -585,6 +630,14 @@ func buildChatRequest(
 	if dto.PreviewToken != nil {
 		token = *dto.PreviewToken
 	}
+	var rag *chat.RAGParams
+	if dto.RAG != nil {
+		rag = &chat.RAGParams{
+			Enabled:     dto.RAG.Enabled,
+			DocumentIDs: dto.RAG.DocumentIDs,
+			TopK:        dto.RAG.TopK,
+		}
+	}
 	return chat.Request{
 		RequestID:    newRequestID(),
 		SessionID:    session.ID,
@@ -596,6 +649,7 @@ func buildChatRequest(
 		ModelTrust:   provider.TrustLevel,
 		Model:        modelOrDefault(dto.Model, provider.Name),
 		PreviewToken: token,
+		RAG:          rag,
 	}
 }
 

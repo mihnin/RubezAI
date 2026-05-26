@@ -36,21 +36,37 @@ type Orchestrator struct {
 	llm          LLMRouter
 	store        Store
 	cipher       *crypto.Cipher // nil — Tx1 mappings не записываются (тесты)
+	retriever    Retriever      // nil — RAG глобально выключен (Итерация 11 §Р4)
 	previewCache *PreviewCache  // кэш sanitize для гейта предпросмотра (J.0)
 	asyncWG      sync.WaitGroup
+	// ragPolicyRevisedReporter — rate-limit (10/час per user) на запись
+	// policy_revised_after_rag в audit (план §Р4). Превышение → один
+	// _throttled-event на окно. nil ⇒ rate-limit отключён (legacy-тесты).
+	ragPolicyRevisedReporter *throttleReporter
 }
 
 // NewOrchestrator создаёт оркестратор с зависимостями.
 // cipher — может быть nil (в этом случае pseudonym_mappings не пишутся;
 // используется только в тестах MVP-уровня). В продакшене обязателен —
 // cmd/rubezh-api строит его из env MAPPING_ENCRYPTION_KEY на старте.
+//
+// Перегрузки/опции для RAG — через WithRetriever().
 func NewOrchestrator(
 	s SanitizerClient, l LLMRouter, st Store, cipher *crypto.Cipher,
 ) *Orchestrator {
 	return &Orchestrator{
 		sanitizer: s, llm: l, store: st, cipher: cipher,
-		previewCache: NewPreviewCache(_previewTTL),
+		previewCache:             NewPreviewCache(_previewTTL),
+		ragPolicyRevisedReporter: newThrottleReporter(10, time.Hour),
 	}
+}
+
+// WithRetriever подключает RAG retriever (Итерация 11 §Р4 Ф4b).
+// nil — глобально отключает RAG (Stream работает как до Итерации 11).
+// Возвращает тот же *Orchestrator для удобного chain'а в main.go.
+func (o *Orchestrator) WithRetriever(r Retriever) *Orchestrator {
+	o.retriever = r
+	return o
 }
 
 // Preview выполняет ЕДИНСТВЕННЫЙ sanitize (фильтр 1+2) и кэширует результат
@@ -256,20 +272,31 @@ func buildEncryptedMappings(
 	return out, nil
 }
 
-// Stream выполняет шаги после открытия SSE: meta → LLM → проверка
-// утечки → запись ответа (Транзакция 2) → стрим → done. Ошибки уровня
-// потока сообщаются через sink.Fail и SSE event `error`.
+// Stream выполняет шаги после открытия SSE: meta, опциональный RAG,
+// LLM, проверка утечки, запись ответа (Транзакция 2), стрим, done.
+// Итерация 11 §Р4 Ф4b: RAG включается req.RAG.Enabled и o.retriever.
 func (o *Orchestrator) Stream(
 	ctx context.Context, req Request, p Prepared, sink EventSink,
 ) error {
 	if err := sink.Meta(metaFor(req, p.preview, p.outcome)); err != nil {
 		return fmt.Errorf("chat: отправка meta: %w", err)
 	}
-	act := actionFor(p.outcome.Decision, req.Message, p.preview.SanitizedText)
-	if !act.callLLM {
-		return o.finishBlocked(ctx, req, p.preview, p.outcome, sink)
+	ragSystem, hits, revised, _ := o.runRetrieval(ctx, req, p.preview, p.outcome)
+	if len(hits) > 0 {
+		if err := sink.RagHits(req.RequestID, hits); err != nil {
+			return fmt.Errorf("chat: отправка rag_hits: %w", err)
+		}
 	}
-	return o.runLLM(ctx, req, p.preview, p.outcome, p.pmap, act, sink)
+	if revised.Decision != p.outcome.Decision {
+		if err := sink.Meta(metaFor(req, p.preview, revised)); err != nil {
+			return fmt.Errorf("chat: отправка обновлённого meta: %w", err)
+		}
+	}
+	act := actionFor(revised.Decision, req.Message, p.preview.SanitizedText)
+	if !act.callLLM {
+		return o.finishBlocked(ctx, req, p.preview, revised, sink)
+	}
+	return o.runLLM(ctx, req, p.preview, revised, p.pmap, act, ragSystem, sink)
 }
 
 // Handle — удобная обёртка Prepare+Stream. HTTP-слой использует Prepare и
@@ -287,12 +314,16 @@ func (o *Orchestrator) Handle(
 
 // runLLM вызывает провайдера, проверяет утечку, записывает ответ и стримит.
 // Tx2 пишется контекстом без отмены — отключение клиента не теряет аудит.
+// ragSystem — system-prefix с RAG-источниками (Итерация 11 §Р4 Ф4b);
+// пустая строка ⇒ обычный путь без RAG.
 func (o *Orchestrator) runLLM(
 	ctx context.Context, req Request, preview sanitizer.PreviewResponse,
-	outcome policy.Outcome, pmap PseudonymMap, act action, sink EventSink,
+	outcome policy.Outcome, pmap PseudonymMap, act action,
+	ragSystem string, sink EventSink,
 ) error {
+	messages := applyRagToMessages(buildLLMMessages(act), ragSystem)
 	resp, err := o.llm.Complete(ctx, req.Provider, llm.ChatRequest{
-		Model: req.Model, Messages: buildLLMMessages(act),
+		Model: req.Model, Messages: messages,
 		APIKeyOverride: req.APIKeyOverride,
 	})
 	if err != nil || resp.Content == "" {
@@ -313,6 +344,12 @@ func (o *Orchestrator) runLLM(
 
 	leaked := pmap.DetectLeak(resp.Content)
 	stored, streamed := finalTexts(act, pmap, resp.Content)
+	// Итерация 11 §Р4 D14/m8: LLM может эхом цитировать <rag_source ...>
+	// делимитер; вычищаем перед стримом и сохранением. Идемпотентно.
+	if ragSystem != "" {
+		streamed = stripSourceEchoes(streamed)
+		stored = stripSourceEchoes(stored)
+	}
 
 	auditCtx, cancel := withDetachedTimeout(ctx)
 	defer cancel()

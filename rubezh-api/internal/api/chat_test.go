@@ -233,6 +233,57 @@ func TestChatHandlerRejectsUnknownField(t *testing.T) {
 	}
 }
 
+// TestChatHandlerParsesRagParams — Итерация 11 §Р4 Ф4c: поле rag в
+// chatRequestDTO разбирается и попадает в chat.Request.RAG.
+func TestChatHandlerParsesRagParams(t *testing.T) {
+	store, closeStore := dbStore(t)
+	defer closeStore()
+	router := llm.NewRouter()
+	name := registerProvider(t, store, router)
+	orch := &fakeChatOrchestrator{}
+
+	body := `{"message":"привет","provider":"` + name +
+		`","rag":{"enabled":true,"top_k":3,"document_ids":[]}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/chat",
+		bytes.NewBufferString(body))
+	req.Header.Set("Authorization", userToken())
+	rec := httptest.NewRecorder()
+	chatTestHandler(orch, store, router).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d (тело %s)", rec.Code, rec.Body)
+	}
+	if orch.gotReq.RAG == nil {
+		t.Fatalf("Request.RAG не заполнен: %+v", orch.gotReq)
+	}
+	if !orch.gotReq.RAG.Enabled || orch.gotReq.RAG.TopK != 3 {
+		t.Errorf("RAG-params: enabled=%v top_k=%d, ожидалось true/3",
+			orch.gotReq.RAG.Enabled, orch.gotReq.RAG.TopK)
+	}
+}
+
+// TestChatHandlerRagOmittedDefaultsNil — без поля rag запрос обрабатывается
+// как раньше: chat.Request.RAG == nil (RAG глобально отключён).
+func TestChatHandlerRagOmittedDefaultsNil(t *testing.T) {
+	store, closeStore := dbStore(t)
+	defer closeStore()
+	router := llm.NewRouter()
+	name := registerProvider(t, store, router)
+	orch := &fakeChatOrchestrator{}
+
+	body := `{"message":"привет","provider":"` + name + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/chat",
+		bytes.NewBufferString(body))
+	req.Header.Set("Authorization", userToken())
+	rec := httptest.NewRecorder()
+	chatTestHandler(orch, store, router).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d (тело %s)", rec.Code, rec.Body)
+	}
+	if orch.gotReq.RAG != nil {
+		t.Errorf("RAG должен быть nil без поля в JSON: %+v", orch.gotReq.RAG)
+	}
+}
+
 func TestChatHandlerRejectsOversizedMessage(t *testing.T) {
 	store, closeStore := dbStore(t)
 	defer closeStore()
@@ -349,6 +400,7 @@ func TestChatEndpointFullFlow(t *testing.T) {
 		AuthSecret:   apiTestSecret,
 		Router:       llmRouter,
 		SanitizerURL: sanURL,
+		Embedder:     llm.MockEmbedder{},
 	})
 	// Защита от будущих изменений payload, которые могут триггернуть
 	// auto-incident: дожидаемся фоновые goroutines до завершения теста.

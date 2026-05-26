@@ -19,6 +19,39 @@ import (
 	"github.com/rubezh-ai/rubezh-api/internal/storage"
 )
 
+// buildEmbedder создаёт Embedder по конфигу. fail-closed: если выбран
+// openai_compatible, но URL/Model не заданы — возвращает ошибку
+// (сервис не стартует — нельзя молча скатываться к mock и порвать
+// симметрию с worker'ом, который читает те же env).
+//
+// Поддерживаемые значения EMBEDDER_KIND:
+//   - ""              → mock (default; обратная совместимость);
+//   - "mock"          → MockEmbedder (детерминированный SHA-256);
+//   - "openai_compatible" → OpenAICompatibleEmbedder (LM Studio /
+//     vLLM / Ollama); требует EMBEDDER_URL + EMBEDDER_MODEL.
+func buildEmbedder(cfg config.EmbedderConfig) (llm.Embedder, error) {
+	switch cfg.Kind {
+	case "", "mock":
+		return llm.MockEmbedder{}, nil
+	case "openai_compatible":
+		if cfg.URL == "" {
+			return nil, fmt.Errorf(
+				"config: EMBEDDER_URL обязателен при EMBEDDER_KIND=openai_compatible")
+		}
+		if cfg.Model == "" {
+			return nil, fmt.Errorf(
+				"config: EMBEDDER_MODEL обязателен при EMBEDDER_KIND=openai_compatible")
+		}
+		timeout := time.Duration(cfg.Timeout) * time.Second
+		return llm.NewOpenAICompatibleEmbedder(
+			cfg.URL, cfg.Model, cfg.APIKey, timeout), nil
+	default:
+		return nil, fmt.Errorf(
+			"config: EMBEDDER_KIND=%q не поддерживается "+
+				"(допустимо: mock, openai_compatible)", cfg.Kind)
+	}
+}
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
 		os.Exit(healthcheck())
@@ -108,6 +141,15 @@ func main() {
 		}
 	}
 
+	embedder, err := buildEmbedder(cfg.Embedder)
+	if err != nil {
+		logger.Error("ошибка инициализации Embedder", "error", err)
+		os.Exit(1)
+	}
+	logger.Info("Embedder инициализирован",
+		"kind", cfg.Embedder.Kind, "model", embedder.Name(),
+		"dim", embedder.Dim())
+
 	handler, orchestrator := api.NewRouter(api.Deps{
 		Logger:        logger,
 		Store:         store,
@@ -116,8 +158,10 @@ func main() {
 		SanitizerURL:  cfg.SanitizerURL,
 		MappingCipher: mappingCipher,
 		Minio:         minioClient,
+		Embedder:      embedder,
 		ReloadRouter:  reloadRouter,
 		OIDC:          oidcAuth,
+		RAGEnabled:    cfg.RAGEnabled,
 	})
 	srv := &http.Server{
 		Addr:              ":" + cfg.HTTPPort,
