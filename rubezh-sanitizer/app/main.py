@@ -7,7 +7,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api.metrics import SanitizerMetrics, router as metrics_router
+from app.api.metrics import SanitizerMetrics
+from app.api.metrics import router as metrics_router
 from app.api.routes import router
 from app.config import settings
 from app.deps import build_cipher, build_llm_detector
