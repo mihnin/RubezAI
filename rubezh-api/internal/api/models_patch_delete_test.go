@@ -85,6 +85,115 @@ func TestPatchModelNotFound(t *testing.T) {
 	}
 }
 
+// TestPatchModelUpdatesDefaultModel — миграция 000019: PATCH должен
+// уметь менять default_model. Полезно для админ-UI и CLI, чтобы
+// переключать модели без правки кода.
+func TestPatchModelUpdatesDefaultModel(t *testing.T) {
+	router, closeStore := dbRouter(t)
+	defer closeStore()
+	provider := createTestProvider(t, router)
+
+	model := "claude-opus-4-7"
+	body, _ := json.Marshal(patchModelRequest{DefaultModel: &model})
+	req := httptest.NewRequest(http.MethodPatch, "/api/models/"+provider.ID,
+		bytes.NewReader(body))
+	req.Header.Set("Authorization", adminToken())
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH default_model: code = %d (тело: %s)", rec.Code, rec.Body)
+	}
+	var dto modelProviderDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &dto); err != nil {
+		t.Fatalf("ответ не JSON: %v", err)
+	}
+	if dto.DefaultModel != model {
+		t.Errorf("default_model = %q, ожидалось %q", dto.DefaultModel, model)
+	}
+}
+
+// TestPatchModelClearsDefaultModel — пустая строка допустима: адаптер
+// откатится к встроенному fallback. Используется когда нужно «сбросить»
+// дефолт, чтобы запрос шёл по адаптерной логике.
+func TestPatchModelClearsDefaultModel(t *testing.T) {
+	router, closeStore := dbRouter(t)
+	defer closeStore()
+	provider := createTestProvider(t, router)
+
+	// Сначала ставим, потом чистим.
+	first := "preset-model"
+	body, _ := json.Marshal(patchModelRequest{DefaultModel: &first})
+	req := httptest.NewRequest(http.MethodPatch, "/api/models/"+provider.ID,
+		bytes.NewReader(body))
+	req.Header.Set("Authorization", adminToken())
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("первый PATCH: code = %d (тело: %s)", rec.Code, rec.Body)
+	}
+
+	empty := ""
+	body, _ = json.Marshal(patchModelRequest{DefaultModel: &empty})
+	req = httptest.NewRequest(http.MethodPatch, "/api/models/"+provider.ID,
+		bytes.NewReader(body))
+	req.Header.Set("Authorization", adminToken())
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("очистка default_model: code = %d (тело: %s)", rec.Code, rec.Body)
+	}
+	var dto modelProviderDTO
+	_ = json.Unmarshal(rec.Body.Bytes(), &dto)
+	if dto.DefaultModel != "" {
+		t.Errorf("default_model = %q, ожидалось пусто", dto.DefaultModel)
+	}
+}
+
+// TestPatchModelDefaultModelExposedInDTO — список провайдеров возвращает
+// default_model в ответе (контракт с UI).
+func TestPatchModelDefaultModelExposedInDTO(t *testing.T) {
+	router, closeStore := dbRouter(t)
+	defer closeStore()
+	provider := createTestProvider(t, router)
+
+	model := "gpt-5.3-codex"
+	body, _ := json.Marshal(patchModelRequest{DefaultModel: &model})
+	req := httptest.NewRequest(http.MethodPatch, "/api/models/"+provider.ID,
+		bytes.NewReader(body))
+	req.Header.Set("Authorization", adminToken())
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH: code = %d (тело: %s)", rec.Code, rec.Body)
+	}
+
+	// GET /api/models — провайдер должен показать default_model.
+	req = httptest.NewRequest(http.MethodGet, "/api/models", nil)
+	req.Header.Set("Authorization", adminToken())
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET: code = %d", rec.Code)
+	}
+	var list []modelProviderDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("список не JSON: %v", err)
+	}
+	found := false
+	for _, p := range list {
+		if p.ID == provider.ID {
+			found = true
+			if p.DefaultModel != model {
+				t.Errorf("default_model в GET = %q, ожидалось %q",
+					p.DefaultModel, model)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("созданный провайдер %s не найден в GET /api/models", provider.ID)
+	}
+}
+
 func TestPatchModelEmptyBodyRejected(t *testing.T) {
 	router, closeStore := dbRouter(t)
 	defer closeStore()

@@ -19,7 +19,12 @@ class SanitizeRequest(BaseModel):
 
     text: str = Field(min_length=1)
     document_id: UUID | None = None
-    context: Literal["chat", "document"]
+    # W3.1: контракт расширен (sanitize.schema.json) — system_prompt /
+    # review_system_prompt отделяют admin-инструкции от user-input
+    # в audit/telemetry. Sanitize-логика одинакова для всех значений.
+    context: Literal[
+        "chat", "document", "system_prompt", "review_system_prompt",
+    ]
 
 
 class EntityOut(BaseModel):

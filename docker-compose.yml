@@ -135,9 +135,31 @@ services:
       # Operator-level RAG-toggle (Итерация 11 MINOR-4). Default — true.
       # RAG_ENABLED=false полностью отключает retrieval в orchestrator.
       RAG_ENABLED: ${RAG_ENABLED:-true}
+      # SSH-CLI bridge для внешних LLM (Codex/Claude/Gemini/Grok CLI на
+      # удалённом сервере). API-ключи НЕ используются. Default — выключен;
+      # включается передачей SSH_LLM_ENABLED=true и валидным ключом/known_hosts.
+      SSH_LLM_ENABLED: ${SSH_LLM_ENABLED:-false}
+      SSH_LLM_HOST: ${SSH_LLM_HOST:-}
+      SSH_LLM_PORT: ${SSH_LLM_PORT:-22}
+      SSH_LLM_USER: ${SSH_LLM_USER:-}
+      # В контейнере пути зафиксированы (см. volumes ниже); хост-пути
+      # подставляются через RUBEZH_SSH_KEY_PATH / RUBEZH_SSH_KNOWN_HOSTS_PATH.
+      SSH_LLM_KEY_PATH: /run/secrets/rubezh_ai_ssh_key
+      SSH_LLM_KNOWN_HOSTS_PATH: /run/secrets/known_hosts
+      SSH_LLM_REMOTE_COMMAND: ${SSH_LLM_REMOTE_COMMAND:-/usr/local/bin/ai-bridge}
+      SSH_LLM_TIMEOUT_SECONDS: ${SSH_LLM_TIMEOUT_SECONDS:-180}
     extra_hosts:
       # позволяет EMBEDDER_URL=http://host.docker.internal:1234 (LM Studio).
       - "host.docker.internal:host-gateway"
+    volumes:
+      # Read-only mount приватного SSH-ключа и known_hosts. Хост-пути
+      # задаются в .env (RUBEZH_SSH_*); файлы НЕ должны лежать в репо.
+      # Если переменные пусты — compose требует существующий путь, поэтому
+      # для dev без bridge достаточно SSH_LLM_ENABLED=false (mount всё
+      # равно срабатывает на любой существующий файл — указать /dev/null
+      # на Linux или валидный путь на Windows).
+      - ${RUBEZH_SSH_KEY_PATH:-/dev/null}:/run/secrets/rubezh_ai_ssh_key:ro
+      - ${RUBEZH_SSH_KNOWN_HOSTS_PATH:-/dev/null}:/run/secrets/known_hosts:ro
     ports:
       - "${API_PORT:-8080}:8080"
     depends_on:

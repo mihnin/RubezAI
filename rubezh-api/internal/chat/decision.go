@@ -1,6 +1,8 @@
 package chat
 
 import (
+	"strings"
+
 	"github.com/rubezh-ai/rubezh-api/internal/llm"
 	"github.com/rubezh-ai/rubezh-api/internal/policy"
 )
@@ -32,12 +34,16 @@ func actionFor(
 // buildLLMMessages формирует список сообщений для LLM. Для summary-режима
 // предваряет user-сообщение system-инструкцией; гарантию безопасности даёт
 // отсутствие restore (план Р3, MAJOR-3).
-func buildLLMMessages(act action) []llm.ChatMessage {
-	if act.summaryMode {
-		return []llm.ChatMessage{
-			{Role: "system", Content: "Ответь кратким резюме, не повторяя детали."},
-			{Role: "user", Content: act.sendText},
-		}
+func buildLLMMessages(act action, systemPrompt string) []llm.ChatMessage {
+	var msgs []llm.ChatMessage
+	if p := strings.TrimSpace(systemPrompt); p != "" {
+		msgs = append(msgs, llm.ChatMessage{Role: "system", Content: p})
 	}
-	return []llm.ChatMessage{{Role: "user", Content: act.sendText}}
+	if act.summaryMode {
+		msgs = append(msgs,
+			llm.ChatMessage{Role: "system", Content: "Ответь кратким резюме, не повторяя детали."},
+		)
+	}
+	msgs = append(msgs, llm.ChatMessage{Role: "user", Content: act.sendText})
+	return msgs
 }

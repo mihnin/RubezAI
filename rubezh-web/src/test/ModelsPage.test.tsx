@@ -15,6 +15,7 @@ const PROVIDER = {
   rate_limit_per_min: null,
   is_enabled: true,
   has_api_key: true,
+  default_model: "",
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
 };

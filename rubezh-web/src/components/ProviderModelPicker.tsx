@@ -2,23 +2,41 @@ import { useState } from "react";
 import { ChevronDown, AlertTriangle, ShieldCheck } from "lucide-react";
 import type { Model } from "../api/schemas";
 
-// modelSuggestions — частые имена моделей по провайдеру (для подсказок выбора).
-// Это лишь подсказки; поле остаётся свободным вводом.
-function modelSuggestions(providerName: string): string[] {
-  const n = providerName.toLowerCase();
+// extraModelSuggestions — дополнительные подсказки моделей по типу
+// провайдера. provider.default_model уже подставлен в основной набор
+// (см. modelSuggestionsFor); здесь — только дополнительные опции для
+// удобства, без необходимости что-либо менять при изменении default_model
+// в БД.
+function extraModelSuggestions(p: Model): string[] {
+  const n = p.name.toLowerCase();
+  if (p.adapter === "ssh_cli") {
+    switch (p.endpoint) {
+      case "codex":
+        return ["gpt-5.3-codex"];
+      case "claude":
+        // claude-opus-4-7 уже в default_model; добавляем sonnet как
+        // быструю/дешевле опцию (подтверждена live smoke в README bridge).
+        return ["claude-opus-4-7", "sonnet"];
+      case "gemini":
+        return ["Gemini 3.5 Flash (High)", "Gemini 3.1 Pro (High)"];
+      case "grok":
+      case "grok-build":
+        return ["grok-build"];
+    }
+  }
   if (n.includes("deepseek")) {
     return n.includes("local")
       ? ["deepseek-r1-distill-qwen-7b"]
       : ["deepseek-v4-flash", "deepseek-v4-pro"];
   }
   if (n.includes("claude") || n.includes("anthropic")) {
-    return ["claude-sonnet-4-6", "claude-opus-4-7", "claude-haiku-4-5-20251001"];
+    return ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"];
   }
   if (n.includes("gpt") || n.includes("openai")) {
     return ["gpt-4o", "gpt-4o-mini"];
   }
   if (n.includes("gemini") || n.includes("google")) {
-    return ["gemini-2.0-flash", "gemini-2.5-pro"];
+    return ["Gemini 3.5 Flash (High)", "Gemini 3.1 Pro (High)"];
   }
   if (n.includes("grok") || n.includes("xai")) {
     return ["grok-2-latest"];
@@ -27,6 +45,24 @@ function modelSuggestions(providerName: string): string[] {
     return ["qwen-max", "qwen-plus", "qwen-turbo"];
   }
   return [];
+}
+
+// modelSuggestionsFor — итоговый список подсказок для UI: provider.default_model
+// первым (если задан), затем — extra suggestions. Дубликаты удаляются.
+function modelSuggestionsFor(p: Model): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const push = (m: string) => {
+    if (m && !seen.has(m)) {
+      seen.add(m);
+      out.push(m);
+    }
+  };
+  push(p.default_model);
+  for (const m of extraModelSuggestions(p)) {
+    push(m);
+  }
+  return out;
 }
 
 interface PickerProps {
@@ -113,13 +149,13 @@ export function ProviderModelPicker({
             className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs font-mono focus:outline-none focus:border-cyan-500"
           />
           <datalist id="model-suggestions">
-            {modelSuggestions(active.name).map((m) => (
+            {modelSuggestionsFor(active).map((m) => (
               <option key={m} value={m} />
             ))}
           </datalist>
-          {modelSuggestions(active.name).length > 0 && (
+          {modelSuggestionsFor(active).length > 0 && (
             <div className="flex flex-wrap gap-1 mt-1.5">
-              {modelSuggestions(active.name).map((m) => (
+              {modelSuggestionsFor(active).map((m) => (
                 <button
                   key={m}
                   onClick={() => onModelChange(m)}

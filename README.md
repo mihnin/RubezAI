@@ -80,9 +80,11 @@ docker compose ps
 5. **Инциденты** — при утечке или deny создаётся `auto`-инцидент со ссылкой
    на `audit_event_id`; терминальный переход требует `resolution`.
 
-### Внешние модели (Claude, ChatGPT, Gemini, Grok, DeepSeek-cloud)
+### Внешние модели — два пути
 
-Миграция `000013_seed_external_providers` создаёт seed для 5 внешних
+#### А. Прямые API-провайдеры (с собственным ключом)
+
+Миграция `000013_seed_external_providers` создаёт seed для 5 cloud-
 провайдеров (выключены до ввода ключа):
 
 | Имя              | Adapter           | Endpoint                                               |
@@ -93,15 +95,62 @@ docker compose ps
 | `xai-grok`       | openai_compatible | `https://api.x.ai/v1`                                  |
 | `deepseek-cloud` | openai_compatible | `https://api.deepseek.com/v1`                          |
 
-Установка ключа (UI: **Модели → Изменить API-ключ**, или curl/CLI):
+Установка ключа (UI: **Модели → Изменить API-ключ**, или CLI):
+
 ```bash
 rubezh login --role admin
-rubezh models set-key deepseek-cloud --key 'sk-…'
-# или через env: --key '$DEEPSEEK_KEY'
+rubezh models set-key deepseek-cloud --key 'sk-…'   # или --key '$DEEPSEEK_KEY'
 ```
 
-Все 5 — `trust_level: external` → получают **только masked** текст. ПДн в
-ответе восстанавливаются обратно для пользователя (псевдоним → raw).
+#### Б. SSH-CLI bridge (без API-ключей у RubezAI)
+
+Если Codex / Claude Code / Gemini Antigravity / Grok-CLI уже
+залогинены на отдельном Ubuntu-сервере серверной учёткой — RubezAI
+может ходить туда по SSH (ed25519 + known_hosts pinning) без хранения
+API-ключей.
+
+Adapter `ssh_cli` (миграции `000017`–`000019`) запускает обёртку
+`/usr/local/bin/ai-bridge <provider>` на сервере; JSON stdin/stdout с
+полями `prompt, model, files?[]`. Контракт — `deploy/ssh-bridge/README.md`.
+
+| Имя              | Endpoint     | Default model               |
+|------------------|--------------|-----------------------------|
+| `codex-cli`      | `codex`      | `gpt-5.3-codex`             |
+| `claude-code-cli`| `claude`     | `claude-opus-4-7`           |
+| `gemini-cli`     | `gemini`     | `Gemini 3.5 Flash (High)` (через Antigravity CLI) |
+| `grok-build`     | `grok-build` | `grok-build`                |
+
+Включается в `.env`:
+
+```
+SSH_LLM_ENABLED=true
+SSH_LLM_HOST=<server-ip>
+SSH_LLM_USER=aiagent
+SSH_LLM_REMOTE_COMMAND=/usr/local/bin/ai-bridge
+RUBEZH_SSH_KEY_PATH=C:/Users/<user>/.ssh/...  # host path
+RUBEZH_SSH_KNOWN_HOSTS_PATH=C:/Users/<user>/.ssh/known_hosts
+```
+
+`default_model` хранится в БД (миграция 000019); меняется через
+`PATCH /api/models/:id`. См. `docs/SSH_CLI_MODELS.md` про процедуру
+безопасной смены модели.
+
+**Файлы-артефакты от модели:** Codex/Claude/Gemini создают
+xlsx/csv/png/pdf в `WORKSPACE` — bridge возвращает base64, adapter
+формирует Markdown data-links, UI рендерит download-chips в чате.
+
+Все провайдеры — `trust_level: external` → получают **только masked**
+текст. ПДн в ответе восстанавливаются обратно для пользователя
+(псевдоним → raw, через кнопку «Показать реальные данные» в UI).
+
+#### CLI fan-out по всем ssh_cli
+
+```bash
+rubezh chat --all "Сравни три подхода к декомпозиции"
+# Последовательно проходит по codex-cli, claude-code-cli, gemini-cli, grok-build.
+# Каждый вызов — отдельный chat-request: sanitize/policy/audit
+# отрабатывают независимо, инварианты не обходятся.
+```
 
 ### Локальные модели (LM Studio / Ollama / vLLM) — для обезличивания
 
@@ -176,10 +225,25 @@ CI гоняет оба теста (`web`) и проверяет отсутств
 
 ## Статус проекта
 
-**MVP завершён.** Backend — Go (api) + Python (sanitizer, worker), Frontend —
-React + Vite, всё запускается одной командой `docker compose up`. Все 15
-критериев приёмки MVP закрыты. Прогресс по итерациям — в
-[`docs/PLAN.md`](docs/PLAN.md).
+**MVP завершён + post-MVP волны W1/W2/W3 закрыты:**
+
+- Итерации 0–16 + дополнения E/F/G.1/G.2/H/H.3/J + RAG (11) + SSH-CLI
+  bridge (17–19) + Codex/Claude/Gemini/Grok файлы — все реализованы и
+  подтверждены живым e2e через `docker compose up` (без mock'ов).
+- W1 (security P1): RBAC + sanitize + audit для `system_prompt` и
+  `review.system_prompts`; документ-flow корректно подставляет тело
+  документа из preview_token.
+- W2 (UX/stability P2): SSE truncation guard, review-loop видит
+  файлы (с защитой от PII через pmap.Remask), worker `/live`/`/ready`
+  раздельно, чистка тестовой полюции БД (–353 провайдеров).
+- W3 (contract + docs): `sanitize.schema.json` расширен до 4 контекстов,
+  preview_token_miss audit дедуплицирован, документация
+  (API/ARCHITECTURE/PLAN/README) синхронизирована с фактической
+  реализацией.
+
+Прогресс — в [`docs/PLAN.md`](docs/PLAN.md), архитектура —
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), API —
+[`docs/API.md`](docs/API.md).
 
 ## Лицензия
 

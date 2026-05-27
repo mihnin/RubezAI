@@ -11,7 +11,11 @@
       "properties": {
         "text": { "type": "string", "minLength": 1 },
         "document_id": { "type": ["string", "null"], "format": "uuid" },
-        "context": { "type": "string", "enum": ["chat", "document"] }
+        "context": {
+          "type": "string",
+          "description": "Контекст вызова sanitize. chat — пользовательское сообщение; document — содержимое загруженного документа; system_prompt — системная инструкция admin/developer для основной модели; review_system_prompt — инструкция reviewer'а в review-loop. Sanitize-логика одинакова, метка нужна для разделения admin-prompts и user-input в audit/telemetry.",
+          "enum": ["chat", "document", "system_prompt", "review_system_prompt"]
+        }
       }
     },
     "Entity": {

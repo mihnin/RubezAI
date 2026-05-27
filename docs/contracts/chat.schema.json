@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://rubezh-ai/contracts/chat.schema.json",
   "title": "Контракт chat: /api/chat, /api/chat/sessions, /api/chat/sessions/:id/messages",
-  "description": "Описывает тело запроса /api/chat, управление сессиями, чтение истории сессии и payload SSE-событий. Поток /api/chat — Server-Sent Events: каждое событие имеет имя (meta|delta|done|error) и data-payload; JSON Schema ниже описывает именно payload каждого события. Имена событий фиксируются текстом контракта.",
+  "description": "Описывает тело запроса /api/chat, управление сессиями, чтение истории сессии и payload SSE-событий. Поток /api/chat — Server-Sent Events: каждое событие имеет имя (meta|status|delta|done|error|rag_hits) и data-payload; JSON Schema ниже описывает именно payload каждого события. Имена событий фиксируются текстом контракта.",
   "$defs": {
     "ChatRequest": {
       "type": "object",
@@ -22,6 +22,11 @@
         },
         "provider": { "type": "string", "minLength": 1 },
         "model": { "type": "string" },
+        "system_prompt": {
+          "type": "string",
+          "maxLength": 8192,
+          "description": "Опциональная системная инструкция для основной модели. Пользовательский текст всё равно проходит sanitizer/policy."
+        },
         "preview_token": {
           "type": ["string", "null"],
           "description": "Одноразовый токен из POST /api/chat/preview (J.0): бэкенд переиспользует тот sanitize — гарантия, что отправлен ровно подтверждённый обезличенный текст"
@@ -41,6 +46,34 @@
               "type": ["integer", "null"],
               "minimum": 1,
               "maximum": 10
+            }
+          }
+        },
+        "review": {
+          "type": ["object", "null"],
+          "description": "Server-side много-модельная ревизия ответа. Черновик основной модели не стримится клиенту: проверяющие модели получают обезличенный запрос и черновик на сервере, затем клиенту отдаётся только финальная версия.",
+          "additionalProperties": false,
+          "required": ["enabled"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "providers": {
+              "type": ["array", "null"],
+              "maxItems": 2,
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "max_rounds": {
+              "type": ["integer", "null"],
+              "minimum": 1,
+              "maximum": 5,
+              "description": "Максимум циклов reviewer verdict -> primary edit. Если отсутствует, backend использует default 3."
+            },
+            "system_prompts": {
+              "type": ["object", "null"],
+              "description": "Опциональные системные инструкции проверяющих моделей: ключ — имя provider из review.providers.",
+              "additionalProperties": {
+                "type": "string",
+                "maxLength": 8192
+              }
             }
           }
         }
@@ -171,6 +204,19 @@
       "required": ["content"],
       "properties": {
         "content": { "type": "string" }
+      }
+    },
+    "SseStatus": {
+      "type": "object",
+      "description": "payload события status — безопасная телеметрия стадии выполнения: policy/RAG/remote CLI/audit. Не содержит raw prompt, stdout/stderr, секретов или токенов.",
+      "additionalProperties": false,
+      "required": ["request_id", "stage", "message", "provider", "model"],
+      "properties": {
+        "request_id": { "type": "string" },
+        "stage":      { "type": "string" },
+        "message":    { "type": "string" },
+        "provider":   { "type": "string" },
+        "model":      { "type": "string" }
       }
     },
     "SseDone": {

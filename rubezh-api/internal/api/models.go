@@ -17,11 +17,22 @@ import (
 )
 
 // validAdapter — допустимые адаптеры (CHECK model_providers.adapter).
-// Синхронизировано с миграцией 000012_external_adapters.
+// Синхронизировано с миграциями 000012_external_adapters и
+// 000017_ssh_cli_providers.
 var validAdapter = map[string]bool{
 	"mock":              true,
 	"openai_compatible": true,
 	"anthropic":         true,
+	"ssh_cli":           true,
+}
+
+// validSSHCLIEndpoint — белый список значений endpoint для adapter ssh_cli.
+// Endpoint выступает первым аргументом ai-bridge на удалённом сервере;
+// держим его узким, чтобы исключить command-injection (защита в глубину —
+// в самом llm/ssh_cli runner есть IsValidSSHProviderArg).
+var validSSHCLIEndpoint = map[string]bool{
+	"codex": true, "claude": true, "gemini": true,
+	"grok": true, "grok-build": true,
 }
 
 // modelProviderDTO — публичная форма ModelProvider.
@@ -37,6 +48,7 @@ type modelProviderDTO struct {
 	RateLimitPerMin *int      `json:"rate_limit_per_min"`
 	IsEnabled       bool      `json:"is_enabled"`
 	HasAPIKey       bool      `json:"has_api_key"`
+	DefaultModel    string    `json:"default_model"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 }
@@ -52,12 +64,16 @@ type createModelRequest struct {
 	MaxTokens       *int    `json:"max_tokens"`
 	RateLimitPerMin *int    `json:"rate_limit_per_min"`
 	APIKey          *string `json:"api_key"`
+	DefaultModel    *string `json:"default_model"`
 }
 
 // patchModelRequest — PATCH /api/models/:id. Поле-указатель отличает
-// «не передано» от false; сейчас поддерживается только toggle is_enabled.
+// «не передано» от false/пустого значения. Поддерживается:
+//   - toggle is_enabled (soft-disable)
+//   - смена default_model (пусто допустимо — fallback к адаптеру)
 type patchModelRequest struct {
-	IsEnabled *bool `json:"is_enabled"`
+	IsEnabled    *bool   `json:"is_enabled"`
+	DefaultModel *string `json:"default_model"`
 }
 
 // patchAPIKeyRequest — POST /api/models/:id/api-key. Plaintext шифруется
@@ -90,6 +106,13 @@ func (r createModelRequest) validate() error {
 				"endpoint должен быть корректным http(s)-URL: %q", r.Endpoint)
 		}
 	}
+	if r.Adapter == "ssh_cli" {
+		if !validSSHCLIEndpoint[r.Endpoint] {
+			return fmt.Errorf(
+				"для adapter ssh_cli endpoint должен быть один из "+
+					"codex|claude|gemini|grok, получено %q", r.Endpoint)
+		}
+	}
 	if r.MaxTokens != nil && *r.MaxTokens <= 0 {
 		return errors.New("max_tokens должен быть положительным")
 	}
@@ -110,6 +133,7 @@ func modelProviderToDTO(p storage.ModelProvider) modelProviderDTO {
 		RateLimitPerMin: p.RateLimitPerMin,
 		IsEnabled:       p.IsEnabled,
 		HasAPIKey:       p.HasAPIKey(),
+		DefaultModel:    p.DefaultModel,
 		CreatedAt:       p.CreatedAt,
 		UpdatedAt:       p.UpdatedAt,
 	}
@@ -178,6 +202,10 @@ func createModelHandler(
 				http.StatusServiceUnavailable)
 			return
 		}
+		defaultModel := ""
+		if req.DefaultModel != nil {
+			defaultModel = *req.DefaultModel
+		}
 		created, err := store.CreateModelProvider(r.Context(), storage.ModelProvider{
 			Name:            req.Name,
 			TrustLevel:      req.TrustLevel,
@@ -185,6 +213,7 @@ func createModelHandler(
 			Endpoint:        req.Endpoint,
 			MaxTokens:       req.MaxTokens,
 			RateLimitPerMin: req.RateLimitPerMin,
+			DefaultModel:    defaultModel,
 		})
 		if err != nil {
 			if errors.Is(err, storage.ErrModelProviderExists) {
@@ -258,20 +287,39 @@ func patchModelHandler(
 			http.Error(w, "некорректный JSON", http.StatusBadRequest)
 			return
 		}
-		if req.IsEnabled == nil {
-			http.Error(w, "нет поддерживаемых полей для изменения (ожидается is_enabled)",
+		if req.IsEnabled == nil && req.DefaultModel == nil {
+			http.Error(w, "нет поддерживаемых полей для изменения "+
+				"(ожидается is_enabled и/или default_model)",
 				http.StatusBadRequest)
 			return
 		}
-		updated, err := store.SetModelProviderEnabled(r.Context(), id, *req.IsEnabled)
-		if err != nil {
-			if errors.Is(err, storage.ErrModelProviderNotFound) {
-				http.NotFound(w, r)
+		var updated storage.ModelProvider
+		var err error
+		if req.IsEnabled != nil {
+			updated, err = store.SetModelProviderEnabled(
+				r.Context(), id, *req.IsEnabled)
+			if err != nil {
+				if errors.Is(err, storage.ErrModelProviderNotFound) {
+					http.NotFound(w, r)
+					return
+				}
+				http.Error(w, "не удалось обновить провайдера",
+					http.StatusInternalServerError)
 				return
 			}
-			http.Error(w, "не удалось обновить провайдера",
-				http.StatusInternalServerError)
-			return
+		}
+		if req.DefaultModel != nil {
+			updated, err = store.SetModelProviderDefaultModel(
+				r.Context(), id, *req.DefaultModel)
+			if err != nil {
+				if errors.Is(err, storage.ErrModelProviderNotFound) {
+					http.NotFound(w, r)
+					return
+				}
+				http.Error(w, "не удалось обновить default_model",
+					http.StatusInternalServerError)
+				return
+			}
 		}
 		tryReloadRouter(r.Context(), reloadRouter, logger, "patchModel")
 		writeJSON(w, http.StatusOK, modelProviderToDTO(updated))

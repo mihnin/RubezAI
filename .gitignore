@@ -239,6 +239,18 @@ rubezh-api/rubezh-api
 docker-compose.override.yml
 *.local
 
+# --- SSH-CLI bridge: приватные ключи и известные хосты НЕ в репо (defense-in-depth) ---
+*.pem
+*.p12
+*.pfx
+id_ed25519
+id_ed25519.pub
+id_rsa
+id_rsa.pub
+rubezai_*_ed25519
+rubezai_*_ed25519.pub
+known_hosts
+
 # --- Рубеж ИИ: рабочие артефакты ТЗ (не часть кодовой базы) ---
 промпт.md
 *.docx

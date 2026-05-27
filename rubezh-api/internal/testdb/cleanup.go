@@ -67,6 +67,11 @@ const extraAllowedHostEnv = "TESTDB_ALLOW_HOST"
 // тестов (`test-policy-`, `model-`, `dup-`, `toggle-` и т.п.). Чистка
 // идёт ОДНОРАЗОВО — после миграции тестов на TestNameUnique() этот
 // список можно убрать.
+//
+// W2.3: расширен префиксами `withkey-/updkey-/nokey-/clrkey-/distkey-`
+// (из models_api_key_test.go) и `chat-prov-` (registerProvider в chat
+// тестах). Эти записи накапливались в dev compose-БД и забивали
+// rubezh-api startup лог ошибками расшифровки api_key.
 var legacyPrefixes = []string{
 	"test-",
 	"dup-",
@@ -76,6 +81,14 @@ var legacyPrefixes = []string{
 	"nullable-",
 	"atomic-",
 	"itest-", // дефис-вариант от предыдущих экспериментов
+	// W2.3 — добавлены префиксы models_api_key_test и chat_test:
+	"withkey-",
+	"updkey-",
+	"nokey-",
+	"clrkey-",
+	"distkey-",
+	"chat-prov-",
+	"pd-model-", // createTestProvider в models_patch_delete_test
 }
 
 // nameCounter обеспечивает уникальность имени даже при двух вызовах в

@@ -1,11 +1,13 @@
 import {
   ChatMetaPayloadSchema,
+  ChatStatusPayloadSchema,
   ChatDeltaPayloadSchema,
   ChatDonePayloadSchema,
   ChatErrorPayloadSchema,
   ChatRagHitsPayloadSchema,
   type ChatEvent,
   type RagRequestParams,
+  type ReviewRequestParams,
 } from "./schemas";
 
 /**
@@ -13,7 +15,7 @@ import {
  * (EventSource не поддерживает кастомные заголовки → нельзя Bearer).
  *
  * Формат backend (rubezh-api/internal/api/chat.go: writeEvent):
- *   event: meta|delta|done|error
+ *   event: meta|status|delta|done|error|rag_hits
  *   data: {...json...}
  *   (пустая строка-разделитель)
  *
@@ -28,8 +30,10 @@ export interface ChatStreamOptions {
   message: string;
   provider: string;
   model: string;
+  systemPrompt?: string; // системная инструкция основной модели
   previewToken?: string; // токен подтверждённого предпросмотра (J.0)
   rag?: RagRequestParams; // RAG-параметры (Итерация 11 §Р4)
+  review?: ReviewRequestParams; // server-side ревизия несколькими моделями
   onEvent: (event: ChatEvent) => void;
   signal?: AbortSignal;
 }
@@ -42,8 +46,10 @@ export async function streamChat(opts: ChatStreamOptions): Promise<void> {
     model: opts.model,
   };
   if (opts.sessionId) body.session_id = opts.sessionId;
+  if (opts.systemPrompt?.trim()) body.system_prompt = opts.systemPrompt.trim();
   if (opts.previewToken) body.preview_token = opts.previewToken;
   if (opts.rag && opts.rag.enabled) body.rag = opts.rag;
+  if (opts.review && opts.review.enabled) body.review = opts.review;
 
   const resp = await fetch("/api/chat", {
     method: "POST",
@@ -64,17 +70,61 @@ export async function streamChat(opts: ChatStreamOptions): Promise<void> {
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
+  // W2.1: backend SSE-контракт обещает терминальный done | error в конце
+  // (см. chat.schema.json). Если поток закрылся раньше — это обрыв
+  // (proxy timeout / network / OOM на стороне модели), UI должен
+  // явно показать ошибку, а не «съесть» half-streamed ответ как успех.
+  let sawTerminal = false;
+  let lastRequestID = "";
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    const blocks = buf.split("\n\n");
-    buf = blocks.pop() ?? "";
-    for (const block of blocks) {
-      const ev = parseBlock(block);
-      if (ev) opts.onEvent(ev);
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const blocks = buf.split("\n\n");
+      buf = blocks.pop() ?? "";
+      for (const block of blocks) {
+        const ev = parseBlock(block);
+        if (!ev) continue;
+        if (ev.type === "meta" || ev.type === "done" || ev.type === "error") {
+          lastRequestID = ev.payload.request_id || lastRequestID;
+        }
+        if (ev.type === "done" || ev.type === "error") {
+          sawTerminal = true;
+        }
+        opts.onEvent(ev);
+      }
     }
+  } catch (e) {
+    // AbortError при пользовательской отмене — НЕ ошибка протокола.
+    // Детектим по двум каналам: signal.aborted (надёжно) и name (legacy
+    // path для DOMException / TypeError: terminated в некоторых
+    // undici-сборках). MN-1 ревью W2.
+    const aborted =
+      opts.signal?.aborted ||
+      (e as Error).name === "AbortError" ||
+      ((e as Error).name === "TypeError" &&
+        /terminated|aborted/i.test((e as Error).message ?? ""));
+    if (!sawTerminal && !aborted) {
+      opts.onEvent({
+        type: "error",
+        payload: {
+          message: `поток оборван: ${(e as Error).message || "network error"}`,
+          request_id: lastRequestID,
+        },
+      });
+    }
+    throw e;
+  }
+  if (!sawTerminal) {
+    opts.onEvent({
+      type: "error",
+      payload: {
+        message: "поток оборван без терминального события (truncated)",
+        request_id: lastRequestID,
+      },
+    });
   }
 }
 
@@ -96,6 +146,10 @@ function parseBlock(block: string): ChatEvent | null {
   if (name === "delta") {
     const r = ChatDeltaPayloadSchema.safeParse(json);
     return r.success ? { type: "delta", payload: r.data } : null;
+  }
+  if (name === "status") {
+    const r = ChatStatusPayloadSchema.safeParse(json);
+    return r.success ? { type: "status", payload: r.data } : null;
   }
   if (name === "done") {
     const r = ChatDonePayloadSchema.safeParse(json);

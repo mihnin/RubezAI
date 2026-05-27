@@ -14,6 +14,7 @@ import (
 	"github.com/rubezh-ai/rubezh-api/internal/chat"
 	"github.com/rubezh-ai/rubezh-api/internal/crypto"
 	"github.com/rubezh-ai/rubezh-api/internal/llm"
+	"github.com/rubezh-ai/rubezh-api/internal/metrics"
 	"github.com/rubezh-ai/rubezh-api/internal/sanitizer"
 	"github.com/rubezh-ai/rubezh-api/internal/storage"
 )
@@ -40,6 +41,10 @@ type Deps struct {
 	// не запускается, даже при rag.enabled=true в запросе). Это
 	// дополнение к user-level toggle во фронте. Default — true.
 	RAGEnabled bool
+	// Metrics — Prometheus-инструментация (W4.1). nil допустим: тесты
+	// и legacy-вызовы могут не настраивать; в этом случае Handler не
+	// регистрируется на /metrics и хендлеры не дёргают Inc/Observe.
+	Metrics *metrics.Metrics
 }
 
 // NewRouter собирает HTTP-роутер сервиса. Маршруты /api защищены
@@ -60,6 +65,10 @@ func NewRouter(deps Deps) (http.Handler, *chat.Orchestrator) {
 	orchestrator := chat.NewOrchestrator(
 		sanitizer.NewClient(deps.SanitizerURL), deps.Router, deps.Store,
 		deps.MappingCipher)
+	// W4.1: подключаем Prometheus-метрики, если переданы (тесты могут не настраивать).
+	if deps.Metrics != nil {
+		orchestrator = orchestrator.WithMetrics(deps.Metrics)
+	}
 	// RAGEnabled (Итерация 11 MINOR-4): operator-level toggle. По умолчанию
 	// retriever всегда подключён; явное RAG_ENABLED=false полностью
 	// отключает retrieval даже при rag.enabled=true в запросе.
@@ -74,6 +83,13 @@ func NewRouter(deps Deps) (http.Handler, *chat.Orchestrator) {
 	r.Use(requestLogger(deps.Logger))
 
 	r.Get("/health", healthHandler)
+	// W4.1: /metrics в Prometheus-формате. Без auth (внутренняя
+	// observability за периметром on-prem); если нужно ограничить —
+	// rule в reverse proxy. nil-Metrics ⇒ endpoint не регистрируется
+	// (тесты не настраивают).
+	if deps.Metrics != nil {
+		r.Method(http.MethodGet, "/metrics", deps.Metrics.Handler())
+	}
 	// Публичный auth-endpoint: выпуск dev-токена. Вне auth-middleware.
 	// docs/design/identity.md §«MVP auth-flow».
 	r.Post("/api/auth/dev-login", devLoginHandler(deps.Store, deps.AuthSecret))

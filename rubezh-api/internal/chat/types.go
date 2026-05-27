@@ -36,6 +36,10 @@ type Store interface {
 // #SseError) всегда содержало коррелятор для расследования.
 type EventSink interface {
 	Meta(m MetaEvent) error
+	// Status сообщает клиенту, на каком этапе сейчас находится запрос.
+	// Это не контент модели, а безопасная телеметрия пайплайна: policy/RAG/
+	// remote CLI/audit. Raw prompt, stderr и секреты сюда не попадают.
+	Status(s StatusEvent) error
 	Delta(content string) error
 	// Done завершает поток. assistantMessageID — id записанного сообщения
 	// ассистента (для последующего reveal); пуст для путей без записи.
@@ -61,6 +65,9 @@ type Request struct {
 	ProviderID string // id записи model_providers (для аудита и БД)
 	ModelTrust string // trust_level провайдера
 	Model      string // имя модели для запроса к LLM
+	// SystemPrompt — опциональная системная инструкция для основной модели.
+	// Задаётся из UI; пользовательский текст всё равно проходит sanitizer/policy.
+	SystemPrompt string
 	// PreviewToken — одноразовый токен закэшированного предпросмотра (J.0).
 	// Если задан и валиден — Prepare переиспользует тот sanitize вместо нового.
 	PreviewToken string
@@ -71,6 +78,27 @@ type Request struct {
 	// → старое поведение без retrieval'а; при наличии — Stream врезает
 	// шаги retrieval / risk-filter / policy re-evaluation между Meta и LLM.
 	RAG *RAGParams
+	// Review — серверная много-модельная ревизия ответа. Если задана,
+	// черновик основной модели НЕ стримится клиенту: он остаётся на сервере,
+	// последовательно проверяется указанными моделями, и только финальная
+	// версия уходит в Delta.
+	Review *ReviewParams
+}
+
+// ReviewProvider — одна модель-проверяющий для серверной ревизии.
+type ReviewProvider struct {
+	Name         string
+	Model        string
+	SystemPrompt string
+}
+
+// ReviewParams — параметры server-side ревизии ответа несколькими моделями.
+type ReviewParams struct {
+	Enabled   bool
+	Providers []ReviewProvider
+	// MaxRounds — максимум полных циклов проверки: reviewers -> primary edit.
+	// 0 означает default в orchestrator_review.go.
+	MaxRounds int
 }
 
 // RiskView — оценка риска для SSE-события meta.
@@ -89,4 +117,14 @@ type MetaEvent struct {
 	Provider  string
 	Reasons   []string
 	RequestID string
+}
+
+// StatusEvent — payload SSE-события status. Событие промежуточное:
+// клиент показывает его во время долгих стадий, особенно remote CLI.
+type StatusEvent struct {
+	RequestID string
+	Stage     string
+	Message   string
+	Provider  string
+	Model     string
 }

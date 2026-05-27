@@ -14,6 +14,7 @@ function model(over: Record<string, unknown>) {
     rate_limit_per_min: null,
     is_enabled: true,
     has_api_key: true,
+    default_model: "",
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     ...over,
@@ -181,7 +182,9 @@ describe("ChatPage — RAG toggle + источники (Итерация 11 §Р
         if (url.endsWith("/api/models")) {
           // делаем trusted_local чтобы не было гейта/preview (упрощает поток)
           return Promise.resolve(
-            jsonResponse([model({ name: "local", trust_level: "trusted_local" })]),
+            jsonResponse([
+              model({ name: "local", trust_level: "trusted_local" }),
+            ]),
           );
         }
         if (url.endsWith("/api/chat/sessions") && method === "POST") {
@@ -239,7 +242,9 @@ describe("ChatPage — RAG toggle + источники (Итерация 11 §Р
         const method = init?.method ?? "GET";
         if (url.endsWith("/api/models")) {
           return Promise.resolve(
-            jsonResponse([model({ name: "local", trust_level: "trusted_local" })]),
+            jsonResponse([
+              model({ name: "local", trust_level: "trusted_local" }),
+            ]),
           );
         }
         if (url.endsWith("/api/chat/sessions") && method === "POST") {
@@ -307,5 +312,278 @@ describe("ChatPage — provider/model picker (G.2c)", () => {
       target: { value: "привет" },
     });
     expect(screen.getByRole("button", { name: "Отправить" })).toBeDisabled();
+  });
+
+  it("использует provider.default_model когда localStorage пуст", async () => {
+    // Имитируем «свежего» пользователя: провайдер уже выбран автоматически
+    // первым из списка, model в localStorage отсутствует.
+    localStorage.setItem("rubezh.chat.provider", "claude-code-cli");
+    let capturedChatBody: unknown = null;
+    // trusted_local — обходит CloudGate (для теста default_model
+    // нужно дойти прямо до doSend без preview-flow).
+    const claude = model({
+      name: "claude-code-cli",
+      adapter: "ssh_cli",
+      endpoint: "claude",
+      trust_level: "trusted_local",
+      default_model: "claude-opus-4-7",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url.endsWith("/api/models")) {
+          return Promise.resolve(jsonResponse([claude]));
+        }
+        if (url.endsWith("/api/chat/sessions") && method === "POST") {
+          return Promise.resolve(
+            jsonResponse({
+              id: "11111111-1111-1111-1111-111111111111",
+              user_id: "22222222-2222-2222-2222-222222222222",
+              title: "web-ui",
+              created_at: "2026-01-01T00:00:00Z",
+              updated_at: "2026-01-01T00:00:00Z",
+            }),
+          );
+        }
+        if (url.endsWith("/api/chat") && method === "POST") {
+          capturedChatBody = JSON.parse(String(init?.body));
+          return Promise.resolve(
+            sseResponse('event: delta\ndata: {"content":"OK"}\n\n'),
+          );
+        }
+        return Promise.resolve(jsonResponse({}));
+      }),
+    );
+
+    renderChat();
+    await screen.findByText("claude-code-cli");
+    fireEvent.change(screen.getByLabelText("Сообщение"), {
+      target: { value: "hi" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Сообщение"), { key: "Enter" });
+
+    await waitFor(() =>
+      expect(capturedChatBody).toMatchObject({ model: "claude-opus-4-7" }),
+    );
+  });
+
+  it("для ssh_cli Codex отправляет рабочий model hint вместо старого alias", async () => {
+    localStorage.setItem("rubezh.chat.provider", "codex-cli");
+    localStorage.setItem("rubezh.chat.model", "gpt-5-codex");
+    let capturedChatBody: unknown = null;
+    const codex = model({
+      name: "codex-cli",
+      adapter: "ssh_cli",
+      endpoint: "codex",
+      trust_level: "trusted_local",
+      default_model: "gpt-5.3-codex",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url.endsWith("/api/models")) {
+          return Promise.resolve(jsonResponse([codex]));
+        }
+        if (url.endsWith("/api/chat/sessions") && method === "POST") {
+          return Promise.resolve(
+            jsonResponse({
+              id: "11111111-1111-1111-1111-111111111111",
+              user_id: "22222222-2222-2222-2222-222222222222",
+              title: "web-ui",
+              created_at: "2026-01-01T00:00:00Z",
+              updated_at: "2026-01-01T00:00:00Z",
+            }),
+          );
+        }
+        if (url.endsWith("/api/chat") && method === "POST") {
+          capturedChatBody = JSON.parse(String(init?.body));
+          return Promise.resolve(
+            sseResponse('event: delta\ndata: {"content":"OK"}\n\n'),
+          );
+        }
+        return Promise.resolve(jsonResponse({}));
+      }),
+    );
+
+    renderChat();
+    await screen.findByText("codex-cli");
+    fireEvent.change(screen.getByLabelText("Сообщение"), {
+      target: { value: "тест" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Сообщение"), { key: "Enter" });
+
+    await waitFor(() =>
+      expect(capturedChatBody).toMatchObject({ model: "gpt-5.3-codex" }),
+    );
+  });
+
+  it("режим ревизии отправляет две проверяющие ssh_cli модели", async () => {
+    localStorage.setItem("rubezh.chat.provider", "codex-cli");
+    let capturedChatBody: unknown = null;
+    const codex = model({
+      name: "codex-cli",
+      adapter: "ssh_cli",
+      endpoint: "codex",
+      trust_level: "trusted_local",
+      default_model: "gpt-5.3-codex",
+    });
+    const claude = model({
+      id: "33333333-3333-3333-3333-333333333333",
+      name: "claude-code-cli",
+      adapter: "ssh_cli",
+      endpoint: "claude",
+      trust_level: "trusted_local",
+      default_model: "claude-opus-4-7",
+    });
+    const grok = model({
+      id: "44444444-4444-4444-4444-444444444444",
+      name: "grok-build",
+      adapter: "ssh_cli",
+      endpoint: "grok-build",
+      trust_level: "trusted_local",
+      default_model: "grok-build",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url.endsWith("/api/models")) {
+          return Promise.resolve(jsonResponse([codex, claude, grok]));
+        }
+        if (url.endsWith("/api/chat/sessions") && method === "POST") {
+          return Promise.resolve(
+            jsonResponse({
+              id: "11111111-1111-1111-1111-111111111111",
+              user_id: "22222222-2222-2222-2222-222222222222",
+              title: "web-ui",
+              created_at: "2026-01-01T00:00:00Z",
+              updated_at: "2026-01-01T00:00:00Z",
+            }),
+          );
+        }
+        if (url.endsWith("/api/chat") && method === "POST") {
+          capturedChatBody = JSON.parse(String(init?.body));
+          return Promise.resolve(
+            sseResponse('event: delta\ndata: {"content":"OK"}\n\n'),
+          );
+        }
+        return Promise.resolve(jsonResponse({}));
+      }),
+    );
+
+    renderChat();
+    await screen.findByText("codex-cli");
+    fireEvent.click(await screen.findByTestId("review-toggle"));
+    fireEvent.change(screen.getByLabelText("Сообщение"), {
+      target: { value: "проверь" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Сообщение"), { key: "Enter" });
+
+    await waitFor(() =>
+      expect(capturedChatBody).toMatchObject({
+        review: {
+          enabled: true,
+          providers: ["claude-code-cli", "grok-build"],
+        },
+      }),
+    );
+  });
+
+  it("окно промтов отправляет system_prompt для модели и ревизоров", async () => {
+    localStorage.setItem("rubezh.chat.provider", "codex-cli");
+    let capturedChatBody: unknown = null;
+    const codex = model({
+      name: "codex-cli",
+      adapter: "ssh_cli",
+      endpoint: "codex",
+      trust_level: "trusted_local",
+      default_model: "gpt-5.3-codex",
+    });
+    const claude = model({
+      id: "33333333-3333-3333-3333-333333333333",
+      name: "claude-code-cli",
+      adapter: "ssh_cli",
+      endpoint: "claude",
+      trust_level: "trusted_local",
+      default_model: "claude-opus-4-7",
+    });
+    const grok = model({
+      id: "44444444-4444-4444-4444-444444444444",
+      name: "grok-build",
+      adapter: "ssh_cli",
+      endpoint: "grok-build",
+      trust_level: "trusted_local",
+      default_model: "grok-build",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url.endsWith("/api/models")) {
+          return Promise.resolve(jsonResponse([codex, claude, grok]));
+        }
+        if (url.endsWith("/api/chat/sessions") && method === "POST") {
+          return Promise.resolve(
+            jsonResponse({
+              id: "11111111-1111-1111-1111-111111111111",
+              user_id: "22222222-2222-2222-2222-222222222222",
+              title: "web-ui",
+              created_at: "2026-01-01T00:00:00Z",
+              updated_at: "2026-01-01T00:00:00Z",
+            }),
+          );
+        }
+        if (url.endsWith("/api/chat") && method === "POST") {
+          capturedChatBody = JSON.parse(String(init?.body));
+          return Promise.resolve(
+            sseResponse('event: delta\ndata: {"content":"OK"}\n\n'),
+          );
+        }
+        return Promise.resolve(jsonResponse({}));
+      }),
+    );
+
+    renderChat();
+    await screen.findByText("codex-cli");
+    fireEvent.click(screen.getByRole("button", { name: /Промты/i }));
+    fireEvent.change(screen.getByLabelText("Системный промт модели 1"), {
+      target: { value: "Основная модель пишет коротко" },
+    });
+    fireEvent.change(screen.getByLabelText("Системный промт модели 2"), {
+      target: { value: "Вторая модель проверяет факты" },
+    });
+    fireEvent.change(screen.getByLabelText("Системный промт модели 3"), {
+      target: { value: "Третья модель проверяет безопасность" },
+    });
+    fireEvent.change(screen.getByLabelText("Максимум циклов ревизии"), {
+      target: { value: "4" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Готово/i }));
+    fireEvent.click(await screen.findByTestId("review-toggle"));
+
+    fireEvent.change(screen.getByLabelText("Сообщение"), {
+      target: { value: "проверь промты" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Сообщение"), { key: "Enter" });
+
+    await waitFor(() =>
+      expect(capturedChatBody).toMatchObject({
+        system_prompt: "Основная модель пишет коротко",
+        review: {
+          providers: ["claude-code-cli", "grok-build"],
+          max_rounds: 4,
+          system_prompts: {
+            "claude-code-cli": "Вторая модель проверяет факты",
+            "grok-build": "Третья модель проверяет безопасность",
+          },
+        },
+      }),
+    );
   });
 });

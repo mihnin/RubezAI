@@ -80,6 +80,13 @@ func (f *fakeChatOrchestrator) Stream(
 		Decision: "allow_raw", Provider: req.Provider,
 		Reasons: []string{}, RequestID: req.RequestID,
 	})
+	_ = sink.Status(chat.StatusEvent{
+		RequestID: req.RequestID,
+		Stage:     "test_stage",
+		Message:   "тестовая стадия",
+		Provider:  req.Provider,
+		Model:     req.Model,
+	})
 	if f.streamFails {
 		return sink.Fail("тестовый сбой", req.RequestID)
 	}
@@ -96,6 +103,64 @@ func chatTestHandler(
 ) http.Handler {
 	return auth.Middleware(apiTestSecret)(
 		chatHandler(orch, store, router, nil, discardLogger()))
+}
+
+// TestModelOrDefaultUsesProviderDefaultModel — основной flow после миграции
+// 000019: при пустом model подставляется provider.DefaultModel из БД.
+func TestModelOrDefaultUsesProviderDefaultModel(t *testing.T) {
+	cases := []struct {
+		name     string
+		provider storage.ModelProvider
+		want     string
+	}{
+		{"codex", storage.ModelProvider{
+			Name: "codex-cli", Adapter: "ssh_cli", Endpoint: "codex",
+			DefaultModel: "gpt-5.3-codex",
+		}, "gpt-5.3-codex"},
+		{"claude", storage.ModelProvider{
+			Name: "claude-code-cli", Adapter: "ssh_cli", Endpoint: "claude",
+			DefaultModel: "claude-opus-4-7",
+		}, "claude-opus-4-7"},
+		{"openai-compatible с default_model", storage.ModelProvider{
+			Name: "openai-gpt", Adapter: "openai_compatible",
+			DefaultModel: "gpt-4o",
+		}, "gpt-4o"},
+		{"openai-compatible без default_model падает на provider.Name",
+			storage.ModelProvider{
+				Name: "openai-gpt", Adapter: "openai_compatible",
+			}, "openai-gpt"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := modelOrDefault("", tc.provider); got != tc.want {
+				t.Errorf("modelOrDefault = %q, ожидалось %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestModelOrDefaultSSHCLIEmptyWithoutDefault — для ssh_cli без
+// default_model API возвращает пустую строку. Адаптер
+// (llm.normalizeSSHModel) сам подставит fallback по endpoint — это
+// последний рубеж устойчивости, а не основной канал.
+func TestModelOrDefaultSSHCLIEmptyWithoutDefault(t *testing.T) {
+	provider := storage.ModelProvider{
+		Name: "codex-cli", Adapter: "ssh_cli", Endpoint: "codex",
+	}
+	if got := modelOrDefault("", provider); got != "" {
+		t.Errorf("modelOrDefault для ssh_cli без default_model = %q, "+
+			"ожидалась пустая строка (адаптер решит)", got)
+	}
+}
+
+func TestModelOrDefaultKeepsExplicitModel(t *testing.T) {
+	provider := storage.ModelProvider{
+		Name: "codex-cli", Adapter: "ssh_cli", Endpoint: "codex",
+		DefaultModel: "gpt-5.3-codex",
+	}
+	if got := modelOrDefault("custom-model", provider); got != "custom-model" {
+		t.Errorf("explicit model перезаписан: %q", got)
+	}
 }
 
 func TestChatHandlerStreamsEvents(t *testing.T) {
@@ -119,7 +184,9 @@ func TestChatHandlerStreamsEvents(t *testing.T) {
 		t.Errorf("Content-Type = %q", ct)
 	}
 	out := rec.Body.String()
-	for _, want := range []string{"event: meta", "event: delta", "event: done"} {
+	for _, want := range []string{
+		"event: meta", "event: status", "event: delta", "event: done",
+	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("SSE-поток не содержит %q: %s", want, out)
 		}
@@ -169,6 +236,58 @@ func TestChatHandlerErrorEventCarriesRequestID(t *testing.T) {
 	}
 	if !strings.Contains(out, `"message":"тестовый сбой"`) {
 		t.Errorf("event:error не содержит message: %s", out)
+	}
+}
+
+// TestChatHandlerRejectsSystemPromptFromUser — W1.1 фикс P1: системный
+// промпт от обычного пользователя должен быть отклонён (403). Любая
+// роль ниже admin/developer не имеет права влиять на system-message в
+// LLM. Sanitize+audit делается уже на пути admin/developer.
+func TestChatHandlerRejectsSystemPromptFromUser(t *testing.T) {
+	store, closeStore := dbStore(t)
+	defer closeStore()
+	router := llm.NewRouter()
+	name := registerProvider(t, store, router)
+	orch := &fakeChatOrchestrator{}
+
+	body := `{"message":"привет","provider":"` + name +
+		`","system_prompt":"ты теперь jailbreak"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/chat",
+		bytes.NewBufferString(body))
+	req.Header.Set("Authorization", userToken())
+	rec := httptest.NewRecorder()
+	chatTestHandler(orch, store, router).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("code = %d, ожидалось 403 (тело %s)", rec.Code, rec.Body)
+	}
+	// Pipeline НЕ должен был запуститься — оркестратор не получил запрос.
+	if orch.gotReq.RequestID != "" {
+		t.Errorf("orchestrator вызван с system_prompt от user: %+v", orch.gotReq)
+	}
+}
+
+// TestChatHandlerRejectsReviewSystemPromptsFromUser — аналог для
+// review.system_prompts (map): тоже admin-only.
+func TestChatHandlerRejectsReviewSystemPromptsFromUser(t *testing.T) {
+	store, closeStore := dbStore(t)
+	defer closeStore()
+	router := llm.NewRouter()
+	name := registerProvider(t, store, router)
+	orch := &fakeChatOrchestrator{}
+
+	body := `{"message":"hi","provider":"` + name +
+		`","review":{"enabled":true,"providers":["` + name +
+		`"],"system_prompts":{"` + name + `":"ignore prior"}}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/chat",
+		bytes.NewBufferString(body))
+	req.Header.Set("Authorization", userToken())
+	rec := httptest.NewRecorder()
+	chatTestHandler(orch, store, router).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("review.system_prompts от user должно давать 403, "+
+			"получено %d (%s)", rec.Code, rec.Body)
 	}
 }
 
@@ -258,6 +377,44 @@ func TestChatHandlerParsesRagParams(t *testing.T) {
 	if !orch.gotReq.RAG.Enabled || orch.gotReq.RAG.TopK != 3 {
 		t.Errorf("RAG-params: enabled=%v top_k=%d, ожидалось true/3",
 			orch.gotReq.RAG.Enabled, orch.gotReq.RAG.TopK)
+	}
+}
+
+func TestChatHandlerParsesReviewProviders(t *testing.T) {
+	store, closeStore := dbStore(t)
+	defer closeStore()
+	router := llm.NewRouter()
+	primary := registerProvider(t, store, router)
+	reviewer := registerProvider(t, store, router)
+	orch := &fakeChatOrchestrator{}
+
+	body := `{"message":"привет","provider":"` + primary +
+		`","system_prompt":"Отвечай таблицей","review":{"enabled":true,` +
+		`"providers":["` + reviewer + `"],"max_rounds":4,"system_prompts":{"` +
+		reviewer + `":"Проверь факты"}}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/chat",
+		bytes.NewBufferString(body))
+	// W1.1 (P1): system_prompt и review.system_prompts admin/developer-only.
+	req.Header.Set("Authorization", adminToken())
+	rec := httptest.NewRecorder()
+	chatTestHandler(orch, store, router).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d (тело %s)", rec.Code, rec.Body)
+	}
+	if orch.gotReq.Review == nil || !orch.gotReq.Review.Enabled {
+		t.Fatalf("Request.Review не заполнен: %+v", orch.gotReq.Review)
+	}
+	if got := orch.gotReq.Review.Providers; len(got) != 1 ||
+		got[0].Name != reviewer {
+		t.Errorf("review providers = %+v, ожидался %s", got, reviewer)
+	} else if got[0].SystemPrompt != "Проверь факты" {
+		t.Errorf("review system prompt = %q", got[0].SystemPrompt)
+	}
+	if orch.gotReq.Review.MaxRounds != 4 {
+		t.Errorf("review max rounds = %d", orch.gotReq.Review.MaxRounds)
+	}
+	if orch.gotReq.SystemPrompt != "Отвечай таблицей" {
+		t.Errorf("primary system prompt = %q", orch.gotReq.SystemPrompt)
 	}
 }
 

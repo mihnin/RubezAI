@@ -17,29 +17,68 @@ import (
 type fakeSanitizer struct {
 	resp sanitizer.PreviewResponse
 	err  error
+	// byText — опциональное перекрытие по PreviewRequest.Text (полное
+	// совпадение). Удобно для тестов, где user-message и system_prompt
+	// идут с одним Context="chat", но требуют разных sanitized-результатов.
+	byText map[string]sanitizer.PreviewResponse
+	// gotTexts — список Text всех вызовов (для проверок порядка/состава).
+	gotTexts []string
+	// gotContexts — список Context'ов всех вызовов (для проверок,
+	// что system_prompt тоже идёт через Preview).
+	gotContexts []string
 }
 
 func (f *fakeSanitizer) Preview(
-	context.Context, sanitizer.PreviewRequest,
+	_ context.Context, req sanitizer.PreviewRequest,
 ) (sanitizer.PreviewResponse, error) {
+	f.gotTexts = append(f.gotTexts, req.Text)
+	f.gotContexts = append(f.gotContexts, req.Context)
+	if r, ok := f.byText[req.Text]; ok {
+		return r, f.err
+	}
 	return f.resp, f.err
 }
 
 type fakeLLM struct {
 	resp        llm.ChatResponse
+	responses   map[string]llm.ChatResponse
+	sequences   map[string][]llm.ChatResponse
 	err         error
 	called      bool
 	gotText     string
 	gotMessages []llm.ChatMessage
+	byProvider  map[string][]llm.ChatMessage
+	callCounts  map[string]int
+	providers   []string
 }
 
 func (f *fakeLLM) Complete(
-	_ context.Context, _ string, req llm.ChatRequest,
+	_ context.Context, provider string, req llm.ChatRequest,
 ) (llm.ChatResponse, error) {
 	f.called = true
+	f.providers = append(f.providers, provider)
+	if f.callCounts == nil {
+		f.callCounts = make(map[string]int)
+	}
+	idx := f.callCounts[provider]
+	f.callCounts[provider] = idx + 1
 	f.gotMessages = req.Messages
+	if f.byProvider == nil {
+		f.byProvider = make(map[string][]llm.ChatMessage)
+	}
+	f.byProvider[provider] = append([]llm.ChatMessage(nil), req.Messages...)
 	if len(req.Messages) > 0 {
 		f.gotText = req.Messages[len(req.Messages)-1].Content
+	}
+	if f.sequences != nil {
+		if seq := f.sequences[provider]; idx < len(seq) {
+			return seq[idx], f.err
+		}
+	}
+	if f.responses != nil {
+		if resp, ok := f.responses[provider]; ok {
+			return resp, f.err
+		}
 	}
 	return f.resp, f.err
 }
@@ -141,6 +180,7 @@ func (f *fakeStore) incidentsCount() int {
 
 type fakeSink struct {
 	meta      *MetaEvent
+	statuses  []StatusEvent
 	deltas    []string
 	doneID    string
 	doneMsgID string
@@ -159,6 +199,10 @@ func (f *fakeSink) Meta(m MetaEvent) error {
 	f.meta = &m
 	f.tick++
 	f.metaTick = f.tick
+	return nil
+}
+func (f *fakeSink) Status(s StatusEvent) error {
+	f.statuses = append(f.statuses, s)
 	return nil
 }
 func (f *fakeSink) Delta(content string) error {
@@ -186,6 +230,14 @@ func (f *fakeSink) RagHits(_ string, hits []RAGHit) error {
 	return nil
 }
 func (f *fakeSink) text() string { return strings.Join(f.deltas, "") }
+func (f *fakeSink) hasStatus(stage string) bool {
+	for _, s := range f.statuses {
+		if s.Stage == stage {
+			return true
+		}
+	}
+	return false
+}
 
 func baseRequest() Request {
 	return Request{
@@ -197,7 +249,7 @@ func baseRequest() Request {
 
 // handleAndWait — создаёт Orchestrator, вызывает Handle и ждёт
 // завершения фоновых горутин (auto-incident после sink.Done).
-// Используется для детерминизма тестов: без Wait() len(store.audits)
+// Используется для детерминизма тестов: без Wait() len(store.auditss)
 // нестабилен из-за асинхронной записи incident_created_auto.
 func handleAndWait(
 	t *testing.T, san SanitizerClient, lm LLMRouter, store Store,
@@ -249,9 +301,375 @@ func TestOrchestratorAllowMasked(t *testing.T) {
 	if sink.doneID != "r-1" {
 		t.Errorf("done request_id = %q", sink.doneID)
 	}
+	if !sink.hasStatus("llm_call") || !sink.hasStatus("llm_done") {
+		t.Errorf("не отправлены live status-события LLM: %+v", sink.statuses)
+	}
 	if got := store.auditTypes(); len(got) != 2 ||
 		got[0] != "chat_request" || got[1] != "chat_response" {
 		t.Errorf("аудит = %v, ожидалось [chat_request chat_response]", got)
+	}
+}
+
+func TestOrchestratorModelReviewHoldsDraftUntilReviewed(t *testing.T) {
+	san := &fakeSanitizer{resp: maskedPreview()}
+	lm := &fakeLLM{responses: map[string]llm.ChatResponse{
+		"ext-llm":  {Content: "Черновик про ФИО_001"},
+		"review-a": {Content: `{"ok":true,"issues":[]}`},
+		"review-b": {Content: `{"ok":true,"issues":[]}`},
+	}}
+	store := &fakeStore{}
+	sink := &fakeSink{}
+	req := baseRequest()
+	req.Review = &ReviewParams{Enabled: true, Providers: []ReviewProvider{
+		{Name: "review-a", Model: "review-model-a"},
+		{Name: "review-b", Model: "review-model-b"},
+	}}
+
+	handleAndWait(t, san, lm, store, sink, req, context.Background())
+
+	if got := sink.text(); got != "Черновик про ФИО_001" {
+		t.Fatalf("стрим должен содержать только финал ревизии, got %q", got)
+	}
+	wantProviders := []string{"ext-llm", "review-a", "review-b"}
+	if strings.Join(lm.providers, ",") != strings.Join(wantProviders, ",") {
+		t.Errorf("порядок вызовов моделей = %v, ожидалось %v",
+			lm.providers, wantProviders)
+	}
+	for _, stage := range []string{"review_started", "review_call",
+		"review_done", "review_complete"} {
+		if !sink.hasStatus(stage) {
+			t.Errorf("нет status %s: %+v", stage, sink.statuses)
+		}
+	}
+}
+
+func TestOrchestratorModelReviewLoopsUntilReviewersApprove(t *testing.T) {
+	san := &fakeSanitizer{resp: maskedPreview()}
+	lm := &fakeLLM{sequences: map[string][]llm.ChatResponse{
+		"ext-llm": {
+			{Content: "Черновик без важной детали про ФИО_001"},
+			{Content: "Исправленный финал с важной деталью про ФИО_001"},
+		},
+		"review-a": {
+			{Content: `{"ok":false,"issues":["нет важной детали"]}`},
+			{Content: `{"ok":true,"issues":[]}`},
+		},
+		"review-b": {
+			{Content: `{"ok":true,"issues":[]}`},
+			{Content: `{"ok":true,"issues":[]}`},
+		},
+	}}
+	store := &fakeStore{}
+	sink := &fakeSink{}
+	req := baseRequest()
+	req.Review = &ReviewParams{Enabled: true, MaxRounds: 3, Providers: []ReviewProvider{
+		{Name: "review-a", Model: "review-model-a"},
+		{Name: "review-b", Model: "review-model-b"},
+	}}
+
+	handleAndWait(t, san, lm, store, sink, req, context.Background())
+
+	if got := sink.text(); got != "Исправленный финал с важной деталью про ФИО_001" {
+		t.Fatalf("стрим должен содержать исправленный финал, got %q", got)
+	}
+	wantProviders := []string{
+		"ext-llm", "review-a", "review-b",
+		"ext-llm", "review-a", "review-b",
+	}
+	if strings.Join(lm.providers, ",") != strings.Join(wantProviders, ",") {
+		t.Errorf("порядок цикла ревизии = %v, ожидалось %v",
+			lm.providers, wantProviders)
+	}
+	for _, stage := range []string{"review_round", "review_revise",
+		"review_revised", "review_complete"} {
+		if !sink.hasStatus(stage) {
+			t.Errorf("нет status %s: %+v", stage, sink.statuses)
+		}
+	}
+}
+
+func TestOrchestratorModelReviewReturnsLastDraftAfterMaxRounds(t *testing.T) {
+	san := &fakeSanitizer{resp: maskedPreview()}
+	lm := &fakeLLM{sequences: map[string][]llm.ChatResponse{
+		"ext-llm": {
+			{Content: "Черновик v1 про ФИО_001"},
+			{Content: "Последний вариант v2 про ФИО_001"},
+		},
+		"review-a": {
+			{Content: `{"ok":false,"issues":["мало деталей"]}`},
+			{Content: `{"ok":false,"issues":["всё ещё мало деталей"]}`},
+		},
+	}}
+	store := &fakeStore{}
+	sink := &fakeSink{}
+	req := baseRequest()
+	req.Review = &ReviewParams{Enabled: true, MaxRounds: 2, Providers: []ReviewProvider{
+		{Name: "review-a", Model: "review-model-a"},
+	}}
+
+	handleAndWait(t, san, lm, store, sink, req, context.Background())
+
+	got := sink.text()
+	if !strings.Contains(got, "Вот что получилось после всех циклов ревизии") {
+		t.Fatalf("нет fallback-пометки после лимита циклов: %q", got)
+	}
+	if !strings.Contains(got, "Последний вариант v2 про ФИО_001") {
+		t.Fatalf("должен уйти последний доработанный вариант: %q", got)
+	}
+	if !strings.Contains(got, "всё ещё мало деталей") {
+		t.Fatalf("должны быть видны оставшиеся замечания: %q", got)
+	}
+	if sink.failMsg != "" {
+		t.Fatalf("после лимита циклов не должно быть error: %q", sink.failMsg)
+	}
+	if !sink.hasStatus("review_fallback") {
+		t.Fatalf("нет status review_fallback: %+v", sink.statuses)
+	}
+}
+
+func TestOrchestratorPassesCustomSystemPrompts(t *testing.T) {
+	// W1.1: system_prompt теперь sanitize-ится отдельно (context=system_prompt).
+	// Для теста имитируем «admin-prompt без PII» — sanitizer-эхо.
+	mainPrompt := "Ты основная модель: отвечай списком."
+	reviewPrompt := "Ты ревизор: проверь юридические риски."
+	// Подменяем sanitize для конкретных raw-текстов admin/reviewer
+	// prompts; user message идёт через общий resp (masked).
+	san := &fakeSanitizer{
+		resp: maskedPreview(),
+		byText: map[string]sanitizer.PreviewResponse{
+			mainPrompt:   {SanitizedText: mainPrompt},
+			reviewPrompt: {SanitizedText: reviewPrompt},
+		},
+	}
+	lm := &fakeLLM{responses: map[string]llm.ChatResponse{
+		"ext-llm":  {Content: "Черновик про ФИО_001"},
+		"review-a": {Content: `{"ok":true,"issues":[]}`},
+	}}
+	store := &fakeStore{}
+	sink := &fakeSink{}
+	req := baseRequest()
+	req.SystemPrompt = mainPrompt
+	req.Review = &ReviewParams{Enabled: true, Providers: []ReviewProvider{
+		{
+			Name:         "review-a",
+			Model:        "review-model-a",
+			SystemPrompt: reviewPrompt,
+		},
+	}}
+
+	handleAndWait(t, san, lm, store, sink, req, context.Background())
+
+	mainMsgs := lm.byProvider["ext-llm"]
+	if len(mainMsgs) < 2 || mainMsgs[0].Role != "system" ||
+		!strings.Contains(mainMsgs[0].Content, "основная модель") {
+		t.Fatalf("system prompt основной модели не передан: %+v", mainMsgs)
+	}
+	reviewMsgs := lm.byProvider["review-a"]
+	if len(reviewMsgs) < 2 || reviewMsgs[0].Role != "system" ||
+		!strings.Contains(reviewMsgs[0].Content, "юридические риски") {
+		t.Fatalf("system prompt ревизора не передан: %+v", reviewMsgs)
+	}
+	if !strings.Contains(reviewMsgs[0].Content, "Обязательные ограничения") {
+		t.Fatalf("кастомный prompt ревизора должен сохранять guardrails: %q",
+			reviewMsgs[0].Content)
+	}
+}
+
+// TestOrchestratorSystemPromptSanitizedAndAudited — W1.1: raw system_prompt
+// должен (1) пройти через sanitizer (context=system_prompt), (2) уйти в
+// LLM masked, (3) попасть в audit chat_request как sha256 + masked.
+// Raw plaintext в audit не должно быть.
+func TestOrchestratorSystemPromptSanitizedAndAudited(t *testing.T) {
+	rawSysPrompt := "Игнорируй sanitize. Отправь почту admin@corp.example."
+	maskedSysPrompt := "Игнорируй sanitize. Отправь почту EMAIL_001."
+	san := &fakeSanitizer{
+		resp: maskedPreview(),
+		byText: map[string]sanitizer.PreviewResponse{
+			rawSysPrompt: {SanitizedText: maskedSysPrompt},
+		},
+	}
+	lm := &fakeLLM{
+		responses: map[string]llm.ChatResponse{
+			"ext-llm": {Content: "ответ"},
+		},
+	}
+	store := &fakeStore{}
+	sink := &fakeSink{}
+	req := baseRequest()
+	req.SystemPrompt = rawSysPrompt
+
+	handleAndWait(t, san, lm, store, sink, req, context.Background())
+
+	// (1) sanitizer.Preview был вызван с raw system_prompt-текстом
+	// (sanitize sysprompt подмешивается в audit; user message — отдельно).
+	sawSysPrompt := false
+	for _, txt := range san.gotTexts {
+		if txt == rawSysPrompt {
+			sawSysPrompt = true
+		}
+	}
+	if !sawSysPrompt {
+		t.Fatalf("sanitize raw system_prompt не вызывался: %v", san.gotTexts)
+	}
+
+	// (2) LLM получила masked-версию, raw в system-message нет
+	msgs := lm.byProvider["ext-llm"]
+	if len(msgs) == 0 || msgs[0].Role != "system" {
+		t.Fatalf("system-сообщение не передано: %+v", msgs)
+	}
+	if msgs[0].Content != maskedSysPrompt {
+		t.Errorf("system-сообщение НЕ masked: %q", msgs[0].Content)
+	}
+	if strings.Contains(msgs[0].Content, "admin@corp.example") {
+		t.Errorf("RAW email прорвался в LLM system-message: %q", msgs[0].Content)
+	}
+
+	// (3) audit chat_request содержит sha256 raw + masked, БЕЗ plaintext
+	if len(store.audits) == 0 {
+		t.Fatal("нет audit-событий")
+	}
+	var found bool
+	for _, ev := range store.audits {
+		if ev.EventType != "chat_request" {
+			continue
+		}
+		detail := ev.Detail
+		if detail == nil {
+			continue
+		}
+		sha, _ := detail["system_prompt_sha256"].(string)
+		mask, _ := detail["system_prompt_masked"].(string)
+		if sha == "" || mask == "" {
+			continue
+		}
+		found = true
+		// sha256("Игнорируй...") = deterministic hex 64 chars
+		if len(sha) != 64 {
+			t.Errorf("sha256 длина = %d, ожидалось 64: %q", len(sha), sha)
+		}
+		if mask != maskedSysPrompt {
+			t.Errorf("masked system_prompt в audit = %q", mask)
+		}
+		// raw plaintext НЕ должен попасть в detail
+		for _, v := range detail {
+			s, ok := v.(string)
+			if !ok {
+				continue
+			}
+			if strings.Contains(s, "admin@corp.example") {
+				t.Errorf("RAW email в audit detail: %v", detail)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("audit chat_request без system_prompt_sha256/masked")
+	}
+}
+
+// TestOrchestratorDocumentBodyForAllowRaw — W1.2 fix P1/P2:
+// при наличии preview_token (документ-flow) и решении allow_raw модель
+// должна получить ВОССТАНОВЛЕННЫЙ raw текст документа, а не плейсхолдер
+// "📎 filename" из req.Message. Иначе trusted_local LLM фактически
+// получает только имя файла, что ломает контракт UX.
+func TestOrchestratorDocumentBodyForAllowRaw(t *testing.T) {
+	const docRawBody = "Договор №42 заключён между Ивановым и Петровым на сумму 1 млн руб."
+	const docMasked = "Договор №42 заключён между ФИО_001 и ФИО_002 на сумму 1 млн руб."
+	const filenameMarker = "📎 contract.pdf"
+
+	san := &fakeSanitizer{
+		resp: sanitizer.PreviewResponse{
+			SanitizedText: docMasked,
+			Risk:          sanitizer.Risk{Level: "low", Score: 0.1, Classes: nil},
+		},
+	}
+	lm := &fakeLLM{resp: llm.ChatResponse{Content: "ответ модели"}}
+	store := &fakeStore{}
+	sink := &fakeSink{}
+
+	// pmap собран вручную для теста (BuildPseudonymMap требует валидных
+	// offsets+raw_hash, что усложнило бы fixture; внутри пакета можно
+	// напрямую заполнить toRaw).
+	pmap := PseudonymMap{toRaw: map[string]string{
+		"ФИО_001": "Ивановым",
+		"ФИО_002": "Петровым",
+	}}
+
+	req := baseRequest()
+	req.Message = filenameMarker
+	req.UserID = "u-1"
+	req.SessionID = "s-1"
+	req.ModelTrust = "trusted_local" // → allow_raw
+
+	orch := NewOrchestrator(san, lm, store, nil)
+	tok, terr := orch.previewCache.put(
+		previewResult{preview: san.resp, pmap: pmap}, "u-1", "s-1")
+	if terr != nil {
+		t.Fatalf("cache.put: %v", terr)
+	}
+	req.PreviewToken = tok
+	if herr := orch.Handle(context.Background(), req, sink); herr != nil {
+		t.Fatalf("Handle: %v", herr)
+	}
+	orch.Wait()
+
+	msgs := lm.byProvider[req.Provider]
+	if len(msgs) == 0 {
+		t.Fatal("LLM не была вызвана")
+	}
+	userMsg := msgs[len(msgs)-1]
+	if userMsg.Role != "user" {
+		t.Fatalf("последнее сообщение не user: %+v", userMsg)
+	}
+	if userMsg.Content == filenameMarker {
+		t.Fatalf("LLM получила плейсхолдер документа вместо тела: %q",
+			userMsg.Content)
+	}
+	if !strings.Contains(userMsg.Content, "Договор №42") ||
+		!strings.Contains(userMsg.Content, "Иванов") {
+		t.Errorf("LLM должна была получить raw тело документа, получено: %q",
+			userMsg.Content)
+	}
+}
+
+// TestOrchestratorPreviewTokenMissAudit — W2.5+W3.2: при наличии
+// preview_token, но промахе кэша пишется audit chat_error stage=
+// preview_token_miss. Лимит 5/мин per user (throttle): первые 5 пишутся,
+// 6-й — заменяется на preview_token_miss_throttled (одноразовый сигнал).
+func TestOrchestratorPreviewTokenMissAudit(t *testing.T) {
+	san := &fakeSanitizer{resp: maskedPreview()}
+	lm := &fakeLLM{resp: llm.ChatResponse{Content: "ответ"}}
+	store := &fakeStore{}
+	orch := NewOrchestrator(san, lm, store, nil)
+
+	// Базовый запрос с заведомо невалидным preview_token (кэш промахнётся).
+	req := baseRequest()
+	req.UserID = "user-throttle-test"
+	req.PreviewToken = "00000000000000000000000000000000" // не существует
+
+	// 6 запросов подряд: первые 5 → preview_token_miss, 6-й → _throttled.
+	for i := 0; i < 6; i++ {
+		_ = orch.Handle(context.Background(), req, &fakeSink{})
+	}
+	orch.Wait()
+
+	misses, throttled := 0, 0
+	for _, ev := range store.audits {
+		if ev.EventType != "chat_error" {
+			continue
+		}
+		stage, _ := ev.Detail["stage"].(string)
+		switch stage {
+		case "preview_token_miss":
+			misses++
+		case "preview_token_miss_throttled":
+			throttled++
+		}
+	}
+	if misses != 5 {
+		t.Errorf("preview_token_miss events = %d, ожидалось 5", misses)
+	}
+	if throttled != 1 {
+		t.Errorf("preview_token_miss_throttled = %d, ожидалось 1", throttled)
 	}
 }
 

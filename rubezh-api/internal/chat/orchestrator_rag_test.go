@@ -15,13 +15,13 @@ import (
 // fakeRetriever — детерминированный retriever для unit-тестов Stream.
 // Запоминает аргументы Retrieve и возвращает заранее заданные hits/err.
 type fakeRetriever struct {
-	calls         int
-	gotSanitized  string
-	gotParams     RAGParams
-	gotUserID     string
-	gotRole       string
-	returnHits    []RAGHit
-	returnErr     error
+	calls        int
+	gotSanitized string
+	gotParams    RAGParams
+	gotUserID    string
+	gotRole      string
+	returnHits   []RAGHit
+	returnErr    error
 }
 
 func (f *fakeRetriever) Retrieve(

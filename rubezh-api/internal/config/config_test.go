@@ -18,6 +18,9 @@ func clearEnv(t *testing.T) {
 		"POSTGRES_PORT", "POSTGRES_DB",
 		"EMBEDDER_KIND", "EMBEDDER_URL", "EMBEDDER_MODEL",
 		"EMBEDDER_API_KEY", "EMBEDDER_TIMEOUT_SECONDS",
+		"SSH_LLM_ENABLED", "SSH_LLM_HOST", "SSH_LLM_PORT", "SSH_LLM_USER",
+		"SSH_LLM_KEY_PATH", "SSH_LLM_KNOWN_HOSTS_PATH",
+		"SSH_LLM_REMOTE_COMMAND", "SSH_LLM_TIMEOUT_SECONDS",
 	} {
 		t.Setenv(key, "")
 	}
@@ -215,6 +218,94 @@ func TestParseIntEnvFallbackOnInvalid(t *testing.T) {
 	}
 	if cfg.Embedder.Timeout != 30 {
 		t.Errorf("Timeout = %d, ожидался fallback 30", cfg.Embedder.Timeout)
+	}
+}
+
+// --- SSH-LLM bridge config (adapter ssh_cli) ---
+
+func TestLoadSSHLLMDefaultsDisabled(t *testing.T) {
+	clearEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.SSHLLM.Enabled {
+		t.Error("default SSH_LLM_ENABLED должен быть false")
+	}
+	if cfg.SSHLLM.Port != 22 {
+		t.Errorf("default Port = %d, ожидалось 22", cfg.SSHLLM.Port)
+	}
+	if cfg.SSHLLM.Timeout != 180 {
+		t.Errorf("default Timeout = %d, ожидалось 180", cfg.SSHLLM.Timeout)
+	}
+	if cfg.SSHLLM.RemoteCommand != "/usr/local/bin/ai-bridge" {
+		t.Errorf("default RemoteCommand = %q", cfg.SSHLLM.RemoteCommand)
+	}
+	if cfg.SSHLLM.Valid() {
+		t.Error("дефолтный (пустой) конфиг не должен быть Valid")
+	}
+}
+
+func TestLoadSSHLLMFullConfig(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("SSH_LLM_ENABLED", "true")
+	t.Setenv("SSH_LLM_HOST", "193.124.93.157")
+	t.Setenv("SSH_LLM_PORT", "2222")
+	t.Setenv("SSH_LLM_USER", "aiagent")
+	t.Setenv("SSH_LLM_KEY_PATH", "/run/secrets/key")
+	t.Setenv("SSH_LLM_KNOWN_HOSTS_PATH", "/run/secrets/known_hosts")
+	t.Setenv("SSH_LLM_REMOTE_COMMAND", "/usr/local/bin/ai-bridge")
+	t.Setenv("SSH_LLM_TIMEOUT_SECONDS", "90")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	s := cfg.SSHLLM
+	if !s.Enabled {
+		t.Error("Enabled должен быть true")
+	}
+	if s.Host != "193.124.93.157" || s.Port != 2222 || s.User != "aiagent" {
+		t.Errorf("host/port/user не совпали: %+v", s)
+	}
+	if s.KeyPath != "/run/secrets/key" ||
+		s.KnownHostsPath != "/run/secrets/known_hosts" {
+		t.Errorf("KeyPath/KnownHosts = %q / %q", s.KeyPath, s.KnownHostsPath)
+	}
+	if s.Timeout != 90 {
+		t.Errorf("Timeout = %d, ожидалось 90", s.Timeout)
+	}
+	if !s.Valid() {
+		t.Error("полный конфиг должен быть Valid")
+	}
+}
+
+func TestSSHLLMValidFailClosed(t *testing.T) {
+	full := SSHLLMConfig{
+		Enabled: true, Host: "h", Port: 22, User: "u",
+		KeyPath: "k", KnownHostsPath: "kh", RemoteCommand: "rc", Timeout: 30,
+	}
+	if !full.Valid() {
+		t.Fatal("эталонный конфиг должен быть Valid")
+	}
+	cases := []struct {
+		name string
+		mut  func(c *SSHLLMConfig)
+	}{
+		{"без host", func(c *SSHLLMConfig) { c.Host = "" }},
+		{"без user", func(c *SSHLLMConfig) { c.User = "" }},
+		{"без key path", func(c *SSHLLMConfig) { c.KeyPath = "" }},
+		{"без known hosts", func(c *SSHLLMConfig) { c.KnownHostsPath = "" }},
+		{"без remote cmd", func(c *SSHLLMConfig) { c.RemoteCommand = "" }},
+		{"port 0", func(c *SSHLLMConfig) { c.Port = 0 }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := full
+			tc.mut(&c)
+			if c.Valid() {
+				t.Errorf("%s: ожидалось Valid()=false, получено true", tc.name)
+			}
+		})
 	}
 }
 

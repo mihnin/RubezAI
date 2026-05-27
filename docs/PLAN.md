@@ -323,11 +323,53 @@
 - **Реализовано:** `pages/{ModelsPage,AuditLogPage,IncidentsPage}.tsx` + RTL-тесты `ModelsPage.test.tsx` (toggle/delete), `IncidentsPage.test.tsx` (If-Match, ResolutionDialog, 412).
 - **Архитектор:** ревью прошло в составе G.2.
 
-### ☐ Итерация 16 — Интеграция и финализация
+### ~~Итерация 16 — Интеграция и финализация~~ ✅ Закрыта
 
-- **Цель:** полный `docker compose up`, e2e smoke-тест, базовая проверка prompt injection, тесты на утечку логов, финальный README.
-- **Тесты:** e2e smoke (главный MVP-сценарий).
-- **Закрывает критерии:** 1, 12, 14, 15 (финальная проверка всех 15).
+- **Цель:** полный `docker compose up`, e2e smoke-тест, базовая проверка
+  prompt injection, тесты на утечку логов, финальный README.
+- **Реализовано:** Все 6 сервисов поднимаются `docker compose up` без
+  моков на критическом пути; e2e подтверждён вживую через rubezh-web ↔
+  rubezh-api ↔ rubezh-sanitizer ↔ rubezh-worker ↔ Postgres ↔ MinIO
+  (включая внешние модели через SSH-CLI bridge). Prompt-injection защита:
+  fixed-template detector в sanitizer + RBAC system_prompt; нет утечек
+  в логах (golden-тест на slog.LogValuer для PseudonymMap и ModelProvider).
+- **Закрывает критерии:** 1, 12, 14, 15.
+
+### ~~Волны post-MVP W1/W2/W3~~ ✅ Закрыты
+
+После внешнего аудита (8 finding'ов P1–P3) — три волны точечных фиксов:
+
+**W1 — Security P1 (sanitize + RBAC для system_prompt, document body в allow_raw):**
+- `system_prompt` и `review.system_prompts` теперь только admin/developer
+  (403 иначе); проходят тот же sanitize-pipeline; audit `chat_request.detail`
+  содержит `system_prompt_sha256` + `system_prompt_masked`, raw НЕ хранится.
+- Документ-flow `allow_raw` восстанавливает тело из `pmap.Restore(SanitizedText)`
+  при наличии `preview_token` — раньше LLM получала только плейсхолдер.
+- Тесты: 4 новых GREEN; live smoke 4/4 (psql подтвердил отсутствие raw).
+
+**W2 — UX/Stability P2 (SSE truncation, review files, dev-DB cleanup, /live vs /ready):**
+- SSE-клиент синтезирует error-event при EOF без `done`/`error`.
+- Review-loop видит файлы-артефакты от primary: text-форматы — preview
+  ≤2KB после pmap.Remask (защита от PII), бинарные — только metadata.
+- Worker: `/live` (no-DB) для liveness, `/ready` (DB + 2s timeout) для
+  readiness; `/health` — alias `/live`.
+- testdb cleanup расширен (withkey-, updkey-, ...); одноразовая чистка
+  387 dev-провайдеров; rubezh-api startup лог чистый.
+- preview_token_miss audit (новая стадия chat_error).
+- Sanitize review-prompt graceful fallback (degrade open, fail closed для PII).
+- Ревью архитектора: 8/10 → закрыты 2 MAJOR (PII через TextPreview,
+  /ready timeout).
+
+**W3 — Contract sync + docs + W2 backlog:**
+- `sanitize.schema.json` расширен 4 контекстами (chat/document/
+  system_prompt/review_system_prompt); Pydantic + Go orchestrator
+  используют отдельные метки для лучшей telemetry.
+- preview_token_miss throttle (5/мин per user, anti-spam).
+- MN-1..MN-5 из ревью W2: AbortError detection через signal.aborted,
+  base64 newlines в regex, size limit на attachment block, bool
+  вместо string в audit fallback.
+- Документация (README, API.md, ARCHITECTURE.md, PLAN.md, CLAUDE.md)
+  синхронизирована с фактической реализацией.
 
 ### ~~Итерация H.3 — LLM-обезличивание (фильтр 2/3) + усиление фильтра 1~~ ✅ Реализовано
 
@@ -466,6 +508,20 @@
   (2) одноразовый e2e через docker-compose в Итерации 16. Полный
   автотест с testcontainers-go отложен как over-engineering для
   on-prem MVP. Scope-cut ревью архитектора Итерации 11 (Q8).
+
+- **SSH-CLI / Review Mode: отложенный техдолг после live-проверок.**
+  Сейчас не блокирует MVP, но должно быть поднято при следующей
+  стабилизационной итерации:
+  - длинные SSE-стримы иногда могут давать `network error`; нужна
+    отдельная диагностика keep-alive/reconnect/backpressure/timeout
+    для длинных ответов и многошаговой ревизии;
+  - e2e mock-SSH тест для `deploy/ssh-bridge/ai-bridge.py`: fake remote
+    command, forced-command контракт stdin/stdout JSON, `files[]`,
+    exit-code/stderr cases;
+  - переход на MinIO-backed attachments, если inline `data:`/base64
+    упрётся в текущий лимит около 5 MB: bridge должен складывать файл
+    в MinIO и отдавать UI signed/download endpoint вместо тяжёлого
+    Markdown data-link.
 
 **~~Закрыто 2026-05-26:~~**
 

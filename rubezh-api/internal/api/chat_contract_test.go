@@ -98,8 +98,16 @@ func TestChatRequestMatchesContract(t *testing.T) {
 	previewToken := ""
 	assertChatSchema(t, "ChatRequest", chatRequestDTO{
 		SessionID: nil, Message: "x", Provider: "p", Model: "m",
+		SystemPrompt: "system",
 		PreviewToken: &previewToken,
 		RAG:          &chatRAGParamsDTO{Enabled: false},
+		Review: &chatReviewParamsDTO{
+			Enabled:   false,
+			MaxRounds: 3,
+			SystemPrompts: map[string]string{
+				"review-a": "prompt",
+			},
+		},
 	})
 }
 
@@ -138,6 +146,10 @@ func TestSseMetaMatchesContract(t *testing.T) {
 
 func TestSseDeltaMatchesContract(t *testing.T) {
 	assertChatSchema(t, "SseDelta", sseDeltaPayload{})
+}
+
+func TestSseStatusMatchesContract(t *testing.T) {
+	assertChatSchema(t, "SseStatus", sseStatusPayload{})
 }
 
 func TestSseDoneMatchesContract(t *testing.T) {

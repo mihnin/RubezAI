@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
   ChatMetaPayloadSchema,
+  ChatStatusPayloadSchema,
   ChatDeltaPayloadSchema,
+  ReviewRequestParamsSchema,
   DocumentListSchema,
   IncidentSchema,
   PolicyListSchema,
@@ -29,9 +31,37 @@ describe("Zod-схемы контрактов API (сверены с rubezh-api 
     });
   });
 
+  it("chat status: парсит стадию выполнения", () => {
+    const s = ChatStatusPayloadSchema.parse({
+      request_id: "req-1",
+      stage: "llm_call",
+      message: "ждём модель",
+      provider: "codex-cli",
+      model: "gpt-5.3-codex",
+    });
+    expect(s.stage).toBe("llm_call");
+  });
+
   it("chat delta: отклоняет невалидный payload", () => {
     expect(() =>
       ChatDeltaPayloadSchema.parse({ text: "wrong-field" }),
+    ).toThrow();
+  });
+
+  it("chat review: максимум две проверяющие модели", () => {
+    expect(
+      ReviewRequestParamsSchema.parse({
+        enabled: true,
+        providers: ["claude-code-cli", "grok-build"],
+        max_rounds: 3,
+        system_prompts: { "claude-code-cli": "проверь факты" },
+      }).providers,
+    ).toHaveLength(2);
+    expect(() =>
+      ReviewRequestParamsSchema.parse({
+        enabled: true,
+        providers: ["a", "b", "c"],
+      }),
     ).toThrow();
   });
 
@@ -84,6 +114,7 @@ describe("Zod-схемы контрактов API (сверены с rubezh-api 
         rate_limit_per_min: null,
         is_enabled: true,
         has_api_key: false,
+        default_model: "",
         created_at: "2026-05-20T10:00:00Z",
         updated_at: "2026-05-20T10:00:00Z",
       },

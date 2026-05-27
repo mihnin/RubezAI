@@ -17,6 +17,20 @@ func (o *Orchestrator) requestRecord(
 	req Request, preview sanitizer.PreviewResponse, outcome policy.Outcome,
 	mappings []storage.PseudonymMappingInput,
 ) storage.ChatRequestRecord {
+	return o.requestRecordWithDetail(req, preview, outcome, mappings,
+		map[string]any{
+			"request_id":   req.RequestID,
+			"entity_count": len(preview.Entities),
+		})
+}
+
+// requestRecordWithDetail — расширение requestRecord с произвольным
+// audit-detail (W1.1: для system_prompt_sha256 / system_prompt_masked).
+// detail должен уже содержать request_id (caller отвечает за порядок).
+func (o *Orchestrator) requestRecordWithDetail(
+	req Request, preview sanitizer.PreviewResponse, outcome policy.Outcome,
+	mappings []storage.PseudonymMappingInput, detail map[string]any,
+) storage.ChatRequestRecord {
 	return storage.ChatRequestRecord{
 		SessionID:   req.SessionID,
 		UserContent: preview.SanitizedText,
@@ -28,11 +42,7 @@ func (o *Orchestrator) requestRecord(
 			Entities:    entitiesJSON(preview.Entities),
 		},
 		Mappings: mappings,
-		Audit: o.auditEvent(req, preview, outcome, "chat_request",
-			map[string]any{
-				"request_id":   req.RequestID,
-				"entity_count": len(preview.Entities),
-			}),
+		Audit:    o.auditEvent(req, preview, outcome, "chat_request", detail),
 	}
 }
 

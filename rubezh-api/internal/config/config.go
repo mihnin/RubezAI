@@ -42,6 +42,38 @@ type Config struct {
 	// не запускается. Используется для on-prem развёртываний, где
 	// retrieval должен быть полностью выключен.
 	RAGEnabled bool
+	// SSHLLM — конфигурация adapter ssh_cli (внешние LLM через bridge на
+	// удалённом сервере по SSH; API-ключи не используются). Пусто/Enabled=false
+	// → провайдеры с adapter=ssh_cli не регистрируются (fail-closed).
+	SSHLLM SSHLLMConfig
+	// MetricsScrapeBearer — опциональный Bearer-token для GET /metrics
+	// (W4 MJ-1). Пусто → endpoint открыт (on-prem за периметром).
+	// Непусто → требует `Authorization: Bearer <value>`.
+	MetricsScrapeBearer string
+}
+
+// SSHLLMConfig — параметры SSH-CLI bridge для внешних LLM (Codex/Claude/
+// Gemini/Grok-CLI на удалённом сервере). Никаких пользовательских ключей и
+// паролей здесь нет: аутентификация — ed25519 (KeyPath, монтируется как
+// docker-secret). Fail-closed: если Enabled=true, но любой из путей/host/user
+// пустой — buildProviders НЕ регистрирует ssh_cli-провайдеров.
+type SSHLLMConfig struct {
+	Enabled        bool
+	Host           string
+	Port           int
+	User           string
+	KeyPath        string // путь к приватному ключу (read-only mount)
+	KnownHostsPath string // путь к known_hosts (host pinning)
+	RemoteCommand  string // напр. /usr/local/bin/ai-bridge
+	Timeout        int    // секунды; default 180
+}
+
+// Valid возвращает true, если конфиг полный и пригоден к использованию.
+// Используется для fail-closed-логики: ssh_cli-провайдер не регистрируется
+// при !Enabled или !Valid().
+func (c SSHLLMConfig) Valid() bool {
+	return c.Host != "" && c.Port > 0 && c.User != "" &&
+		c.KeyPath != "" && c.KnownHostsPath != "" && c.RemoteCommand != ""
 }
 
 // EmbedderConfig — конфигурация Embedder'а (Итерация 11 §Р2).
@@ -113,7 +145,19 @@ func Load() (Config, error) {
 		},
 		// RAG_ENABLED — only "false" / "0" disables; всё прочее (включая
 		// отсутствие env) = true (default-on, удобный для on-prem MVP).
-		RAGEnabled: os.Getenv("RAG_ENABLED") != "false" && os.Getenv("RAG_ENABLED") != "0",
+		RAGEnabled:          os.Getenv("RAG_ENABLED") != "false" && os.Getenv("RAG_ENABLED") != "0",
+		MetricsScrapeBearer: os.Getenv("METRICS_SCRAPE_BEARER"),
+		SSHLLM: SSHLLMConfig{
+			Enabled:        os.Getenv("SSH_LLM_ENABLED") == "true",
+			Host:           os.Getenv("SSH_LLM_HOST"),
+			Port:           parseIntEnv("SSH_LLM_PORT", 22),
+			User:           os.Getenv("SSH_LLM_USER"),
+			KeyPath:        os.Getenv("SSH_LLM_KEY_PATH"),
+			KnownHostsPath: os.Getenv("SSH_LLM_KNOWN_HOSTS_PATH"),
+			RemoteCommand: getEnv("SSH_LLM_REMOTE_COMMAND",
+				"/usr/local/bin/ai-bridge"),
+			Timeout: parseIntEnv("SSH_LLM_TIMEOUT_SECONDS", 180),
+		},
 	}
 	if cfg.AuthSecret == "" {
 		return Config{}, fmt.Errorf("config: переменная AUTH_DEV_TOKEN_SECRET обязательна")

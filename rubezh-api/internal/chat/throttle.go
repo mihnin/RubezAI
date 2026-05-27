@@ -12,17 +12,20 @@ import (
 // до следующего окна. Внутри окна Allow для разрешённых событий
 // возвращает (true, false).
 //
-// Используется для policy_revised_after_rag (10/час) — без него хватит
-// одного «талантливого» retrieval-чанка, чтобы шумно поднимать аудит-журнал.
+// Используется для:
+//   - policy_revised_after_rag (10/час) — Итерация 11 §Р4;
+//   - preview_token_miss (5/мин) — W3.2 (MJ-3 ревью W2).
 //
 // Реализация in-memory + sync.Mutex; для on-prem MVP с одним инстансом
 // API-сервиса этого достаточно. При горизонтальном масштабировании ⇒
-// перенести в Postgres advisory locks.
+// перенести в Postgres (см. docs/design/scalable-throttle.md — план
+// миграции, схема `throttle_buckets`, атомарный UPSERT, интерфейс
+// ThrottleStore с двумя реализациями).
 type throttleReporter struct {
-	mu       sync.Mutex
-	limit    int
-	window   time.Duration
-	state    map[string]*throttleState
+	mu     sync.Mutex
+	limit  int
+	window time.Duration
+	state  map[string]*throttleState
 }
 
 type throttleState struct {

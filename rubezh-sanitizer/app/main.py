@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.api.metrics import SanitizerMetrics, router as metrics_router
 from app.api.routes import router
 from app.config import settings
 from app.deps import build_cipher, build_llm_detector
@@ -21,8 +22,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     app.state.cipher = build_cipher()
     app.state.llm_detector = build_llm_detector()
+    # W4.2: Prometheus-метрики; передаются в роуты через app.state.metrics.
+    app.state.metrics = SanitizerMetrics()
     yield
 
 
 app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
 app.include_router(router)
+app.include_router(metrics_router)

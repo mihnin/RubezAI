@@ -78,20 +78,37 @@ LLM-фильтр **не принимает** решение allow/deny — он 
 
 ## 5. Жизненный цикл запроса `POST /api/chat`
 
-1. `rubezh-api` принимает запрос (текст + опционально ссылки на документы).
-2. API вызывает `sanitizer /sanitize/preview` → получает сущности, маскированный
-   текст, risk score, псевдонимы.
-3. **Policy Engine** (Go) оценивает: `(режим доверия модели, риск-классы, типы
-   сущностей, роль пользователя)` → решение
+1. `rubezh-api` принимает запрос (текст, опц. `preview_token`,
+   `system_prompt` admin/dev-only, `review`-параметры, `rag`-параметры).
+2. **RBAC**: `system_prompt` и `review.system_prompts` от не-admin/dev →
+   `403 Forbidden`. Иначе они проходят тот же sanitize, что user-input;
+   sha256+masked пишутся в audit (W1.1).
+3. API вызывает `sanitizer /sanitize/preview` (или достаёт из
+   `preview_cache` по `preview_token` для гейта J.1) → сущности,
+   маскированный текст, risk score, псевдонимы.
+4. **Policy Engine** (Go) → решение
    `allow_raw | allow_masked | allow_summary_only | deny | escalate`.
-4. Если `deny` → создаётся инцидент + audit event, пользователю возвращается отказ.
-5. Если разрешено → **LLM Router** отправляет (как правило, маскированный) текст
-   выбранному провайдеру (mock / OpenAI-совместимый), ответ стримится через **SSE**.
-6. Пост-проверка ответа: повторное сканирование на утёкшие секреты и маркеры
-   prompt injection.
-7. По политике — обратная подстановка псевдонимов в ответе для пользователя.
-8. Записывается **append-only** audit event (риск-классы + masked representation,
-   raw-значения — отдельно и зашифрованно).
+5. **SSE открывается**: `event: meta`, далее серия `event: status` со
+   стадиями (`policy_checked`, `rag_search`/`rag_done`, `policy_revised`,
+   `blocked`, `llm_call`, `llm_done`, `streaming_answer`).
+6. **RAG (опц., Итерация 11):** retrieve чанки → severity cap +1 →
+   filter high-risk для external → `event: rag_hits`.
+7. Если `deny` → создаётся инцидент + audit event, пользователю SSE
+   `done` без `delta`. Если разрешено → **LLM Router** отправляет
+   masked/raw текст выбранному провайдеру.
+8. **Server-side review-loop** (опц.): primary возвращает черновик →
+   K раундов ревизоров (claude/gemini/...); attachments-файлы тоже
+   передаются ревизорам через `[📎 имя](data:mime;base64,...)` блок
+   с pmap.Remask на TextPreview (защита от PII при revision-цикле).
+9. **Files-артефакты от модели** (ssh_cli): bridge собирает diff
+   `WORKSPACE` → base64 → Markdown data-link → UI рендерит chips.
+10. Пост-проверка: detect leak, при `allow_masked` — Remask ответа,
+    при `allow_raw` — без изменения, при `summary_only` — Remask + flag.
+11. Запись `chat_response` в audit. SSE: `delta` × N → `done` с
+    `assistant_message_id` (нужен для `/messages/{id}/reveal` J.2)
+    или `error` при сбое (с `request_id`).
+12. Клиентский SSE-парсер (`sse.ts`) защищён truncation guard:
+    EOF без `done`/`error` синтезирует `error`-event (W2.1).
 
 ## 6. Жизненный цикл загрузки документа
 

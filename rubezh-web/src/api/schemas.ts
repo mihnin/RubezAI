@@ -32,6 +32,15 @@ export const ChatDeltaPayloadSchema = z.object({
   content: z.string(),
 });
 
+export const ChatStatusPayloadSchema = z.object({
+  request_id: z.string(),
+  stage: z.string(),
+  message: z.string(),
+  provider: z.string(),
+  model: z.string(),
+});
+export type ChatStatusPayload = z.infer<typeof ChatStatusPayloadSchema>;
+
 export const ChatDonePayloadSchema = z.object({
   request_id: z.string(),
   // id сообщения ассистента для reveal (J.2); старые потоки могут не слать
@@ -94,6 +103,14 @@ export const RagRequestParamsSchema = z.object({
 });
 export type RagRequestParams = z.infer<typeof RagRequestParamsSchema>;
 
+export const ReviewRequestParamsSchema = z.object({
+  enabled: z.boolean(),
+  providers: z.array(z.string()).max(2).optional(),
+  max_rounds: z.number().int().min(1).max(5).optional(),
+  system_prompts: z.record(z.string().max(8192)).optional(),
+});
+export type ReviewRequestParams = z.infer<typeof ReviewRequestParamsSchema>;
+
 // Метаданные одного источника в SSE event rag_hits (без snippet'а — он
 // уходит только в LLM-context). Контракт rag.schema.json#RagHitMeta.
 export const RagHitMetaSchema = z.object({
@@ -114,6 +131,7 @@ export const ChatRagHitsPayloadSchema = z.object({
 // формируется из backend SSE-events в sse.ts.
 export type ChatEvent =
   | { type: "meta"; payload: z.infer<typeof ChatMetaPayloadSchema> }
+  | { type: "status"; payload: ChatStatusPayload }
   | { type: "delta"; payload: z.infer<typeof ChatDeltaPayloadSchema> }
   | { type: "done"; payload: z.infer<typeof ChatDonePayloadSchema> }
   | { type: "error"; payload: z.infer<typeof ChatErrorPayloadSchema> }
@@ -172,6 +190,7 @@ export const ModelSchema = z.object({
   rate_limit_per_min: z.number().int().nullable(),
   is_enabled: z.boolean(),
   has_api_key: z.boolean(),
+  default_model: z.string(),
   created_at: z.string(),
   updated_at: z.string(),
 });

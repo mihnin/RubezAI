@@ -5,6 +5,7 @@
 //	rubezh login --role user                    # dev-вход (сохранить токен)
 //	rubezh login --sso                          # вход через браузер (OIDC, K.2)
 //	rubezh chat --provider deepseek-cloud --model deepseek-chat "Привет"
+//	rubezh chat --provider codex-cli "Привет"      # model выберется сам
 //	rubezh models list
 //	rubezh models set-key NAME --key sk-...        # org-ключ провайдера
 //	rubezh models enable google-gemini             # включить провайдера
@@ -57,6 +58,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "rubezh — CLI к Рубеж ИИ. Команды:")
 		fmt.Fprintln(os.Stderr, "  login           вход по роли (dev-токен)")
 		fmt.Fprintln(os.Stderr, "  chat MSG        отправить сообщение в чат")
+		fmt.Fprintln(os.Stderr, "  chat --all MSG  fan-out во все enabled ssh_cli (Codex/Claude/Gemini/Grok Build)")
 		fmt.Fprintln(os.Stderr, "  models list     список LLM-провайдеров")
 		fmt.Fprintln(os.Stderr, "  models set-key  установить API-ключ провайдеру")
 		fmt.Fprintln(os.Stderr, "  docs upload F   загрузить документ")
@@ -226,8 +228,10 @@ func openBrowser(rawURL string) error {
 func (c *cli) cmdChat(args []string) error {
 	fs := flag.NewFlagSet("chat", flag.ExitOnError)
 	provider := fs.String("provider", "deepseek-cloud", "имя провайдера")
-	model := fs.String("model", "deepseek-chat", "имя модели у провайдера")
+	model := fs.String("model", "", "имя модели у провайдера (пусто = default)")
 	sessionID := fs.String("session", "", "session_id (UUID; auto-генерируется при пустом)")
+	all := fs.Bool("all", false,
+		"fan-out: отправить во все enabled ssh_cli (внешний bridge) провайдеры")
 	_ = fs.Parse(args)
 	if c.token == "" {
 		return errors.New("требуется login")
@@ -235,21 +239,29 @@ func (c *cli) cmdChat(args []string) error {
 	if fs.NArg() == 0 {
 		return errors.New("укажите сообщение: rubezh chat \"...\"")
 	}
-	if *sessionID == "" {
-		// Auto-создаём сессию через POST /api/chat/sessions; backend требует
-		// существующую session_id, иначе 404. CLI берёт ID из ответа.
+	message := strings.Join(fs.Args(), " ")
+	if *all {
+		return c.runFanoutChat(message, *sessionID)
+	}
+	// Пустой *model передаём как есть — API подставит provider.DefaultModel
+	// (миграция 000019). Это устраняет CLI-хардкод имён моделей.
+	return c.runSingleChat(*provider, *model, *sessionID, message)
+}
+
+// runSingleChat — обычный режим: один провайдер, SSE-стрим в stdout.
+func (c *cli) runSingleChat(provider, model, sessionID, message string) error {
+	if sessionID == "" {
 		id, err := c.createSession("rubezh-cli")
 		if err != nil {
 			return fmt.Errorf("создание session_id: %w", err)
 		}
-		*sessionID = id
+		sessionID = id
 	}
-	message := strings.Join(fs.Args(), " ")
 	body, _ := json.Marshal(map[string]any{
-		"session_id": *sessionID,
+		"session_id": sessionID,
 		"message":    message,
-		"provider":   *provider,
-		"model":      *model,
+		"provider":   provider,
+		"model":      model,
 	})
 	req, _ := http.NewRequest("POST", c.api+"/api/chat", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+c.token)
@@ -264,6 +276,78 @@ func (c *cli) cmdChat(args []string) error {
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, bodyText(resp))
 	}
 	return streamSSE(resp.Body)
+}
+
+// fanoutTarget — минимальный набор полей провайдера, нужный для --all.
+type fanoutTarget struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Adapter      string `json:"adapter"`
+	TrustLevel   string `json:"trust_level"`
+	IsEnabled    bool   `json:"is_enabled"`
+	DefaultModel string `json:"default_model"`
+}
+
+// runFanoutChat — режим `--all`: последовательно вызывает каждого
+// enabled `adapter=ssh_cli` (external) провайдера, печатает разделители
+// и поток ответа. Каждый вызов — отдельный chat-request, поэтому
+// sanitize/policy/audit отрабатывают независимо (security-инварианты
+// не обходятся). Sequential, чтобы не нагружать удалённый bridge параллельно.
+// Использует отдельный session_id на каждого провайдера — иначе
+// существующая session-history привязана к одной модели и ломает
+// summary/контекст.
+func (c *cli) runFanoutChat(message, sharedSessionID string) error {
+	var providers []fanoutTarget
+	if err := c.getJSON("/api/models", &providers); err != nil {
+		return fmt.Errorf("список провайдеров: %w", err)
+	}
+	targets := make([]fanoutTarget, 0, len(providers))
+	for _, p := range providers {
+		if p.Adapter == "ssh_cli" && p.TrustLevel == "external" && p.IsEnabled {
+			targets = append(targets, p)
+		}
+	}
+	if len(targets) == 0 {
+		return errors.New(
+			"--all: нет enabled ssh_cli (external) провайдеров. " +
+				"Проверьте `rubezh models list`")
+	}
+	fmt.Fprintf(os.Stderr,
+		"[fan-out: %d провайдеров — %s]\n",
+		len(targets), joinProviderNames(targets))
+	for i, p := range targets {
+		fmt.Println()
+		fmt.Printf("───── [%d/%d] %s ─────\n", i+1, len(targets), p.Name)
+		// Отдельный session_id на каждого провайдера. Если caller передал
+		// sharedSessionID, используем его для всех — это согласованно
+		// для script-режима, но смешивает разные модели в одной сессии.
+		sid := sharedSessionID
+		if sid == "" {
+			id, err := c.createSession("rubezh-cli --all " + p.Name)
+			if err != nil {
+				fmt.Fprintf(os.Stderr,
+					"  [пропуск: создание session: %v]\n", err)
+				continue
+			}
+			sid = id
+		}
+		// p.DefaultModel из API (миграция 000019). Если пусто — пустой
+		// model, API сам подставит свой fallback (ssh_cli адаптер
+		// нормализует по endpoint).
+		if err := c.runSingleChat(p.Name, p.DefaultModel, sid, message); err != nil {
+			fmt.Fprintf(os.Stderr, "  [ошибка %s: %v]\n", p.Name, err)
+		}
+	}
+	fmt.Println()
+	return nil
+}
+
+func joinProviderNames(providers []fanoutTarget) string {
+	names := make([]string, len(providers))
+	for i, p := range providers {
+		names[i] = p.Name
+	}
+	return strings.Join(names, ", ")
 }
 
 // streamSSE парсит RFC 6202 (event:/data:) и печатает в stdout.

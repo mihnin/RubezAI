@@ -24,6 +24,10 @@ import (
 // _maxChatMessageRunes — верхняя граница длины сообщения
 // (контракт chat.schema.json, ChatRequest.message.maxLength).
 const _maxChatMessageRunes = 16384
+const _maxSystemPromptRunes = 8192
+const _maxReviewProviders = 2
+const _maxReviewRounds = 5
+const _defaultReviewRounds = 3
 
 // chatOrchestrator — зависимость обработчика /api/chat. Разделён на
 // Prepare (до открытия SSE) и Stream (после) — это позволяет отдавать
@@ -47,12 +51,15 @@ type chatRequestDTO struct {
 	Message   string  `json:"message"`
 	Provider  string  `json:"provider"`
 	Model     string  `json:"model"`
+	// SystemPrompt — опциональная системная инструкция для основной модели.
+	SystemPrompt string `json:"system_prompt,omitempty"`
 	// PreviewToken — токен из POST /api/chat/preview (J.0); если задан,
 	// бэкенд переиспользует тот sanitize (гарантия идентичности текста).
 	PreviewToken *string `json:"preview_token"`
 	// RAG — параметры retrieval'а (Итерация 11 §Р4 Ф4c). nil или
 	// enabled=false → старое поведение без RAG.
-	RAG *chatRAGParamsDTO `json:"rag,omitempty"`
+	RAG    *chatRAGParamsDTO    `json:"rag,omitempty"`
+	Review *chatReviewParamsDTO `json:"review,omitempty"`
 }
 
 // chatRAGParamsDTO — DTO для поля rag в /api/chat
@@ -61,6 +68,13 @@ type chatRAGParamsDTO struct {
 	Enabled     bool     `json:"enabled"`
 	DocumentIDs []string `json:"document_ids,omitempty"`
 	TopK        int      `json:"top_k,omitempty"`
+}
+
+type chatReviewParamsDTO struct {
+	Enabled       bool              `json:"enabled"`
+	Providers     []string          `json:"providers,omitempty"`
+	SystemPrompts map[string]string `json:"system_prompts,omitempty"`
+	MaxRounds     int               `json:"max_rounds,omitempty"`
 }
 
 // chatPreviewRequestDTO — тело POST /api/chat/preview (J.1).
@@ -121,6 +135,14 @@ type sseDeltaPayload struct {
 	Content string `json:"content"`
 }
 
+type sseStatusPayload struct {
+	RequestID string `json:"request_id"`
+	Stage     string `json:"stage"`
+	Message   string `json:"message"`
+	Provider  string `json:"provider"`
+	Model     string `json:"model"`
+}
+
 type sseDonePayload struct {
 	RequestID string `json:"request_id"`
 	// AssistantMessageID — id сообщения ассистента для последующего reveal (J.2).
@@ -151,6 +173,33 @@ type sseRagHitsPayload struct {
 	Hits      []sseRagHitPayload `json:"hits"`
 }
 
+// systemPromptWriteRoles — кто может присылать system_prompt /
+// review.system_prompts. Эти поля становятся `system`-message в LLM,
+// то есть могут переписать инструкции; user/security_officer/auditor
+// не должны иметь доступ к этому каналу (W1.1, P1-fix аудита).
+var systemPromptWriteRoles = map[auth.Role]bool{
+	auth.RoleAdmin:     true,
+	auth.RoleDeveloper: true,
+}
+
+// containsSystemPromptOverrides — true, если в теле задан непустой
+// system_prompt (основной) или хотя бы один непустой entry в
+// review.system_prompts (за reviewer'ом). Пустые/whitespace-значения
+// тривиально игнорируются — для них RBAC проверять незачем.
+func (d chatRequestDTO) containsSystemPromptOverrides() bool {
+	if strings.TrimSpace(d.SystemPrompt) != "" {
+		return true
+	}
+	if d.Review != nil {
+		for _, p := range d.Review.SystemPrompts {
+			if strings.TrimSpace(p) != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // validate проверяет тело /api/chat против контракта.
 func (d chatRequestDTO) validate() error {
 	if d.Message == "" {
@@ -162,8 +211,34 @@ func (d chatRequestDTO) validate() error {
 	if d.Provider == "" {
 		return errors.New("поле provider обязательно")
 	}
+	if utf8.RuneCountInString(d.SystemPrompt) > _maxSystemPromptRunes {
+		return fmt.Errorf("system_prompt длиннее %d символов",
+			_maxSystemPromptRunes)
+	}
 	if d.SessionID != nil && !isUUID(*d.SessionID) {
 		return errors.New("session_id должен быть корректным UUID")
+	}
+	if d.Review != nil {
+		for name, prompt := range d.Review.SystemPrompts {
+			if utf8.RuneCountInString(prompt) > _maxSystemPromptRunes {
+				return fmt.Errorf(
+					"review.system_prompts[%s] длиннее %d символов",
+					name, _maxSystemPromptRunes)
+			}
+		}
+		if d.Review.Enabled {
+			if len(d.Review.Providers) == 0 {
+				return errors.New("review.providers должен содержать хотя бы одну модель")
+			}
+			if len(d.Review.Providers) > _maxReviewProviders {
+				return fmt.Errorf("review.providers: максимум %d проверяющих",
+					_maxReviewProviders)
+			}
+			if d.Review.MaxRounds < 0 || d.Review.MaxRounds > _maxReviewRounds {
+				return fmt.Errorf("review.max_rounds: от 1 до %d",
+					_maxReviewRounds)
+			}
+		}
 	}
 	return nil
 }
@@ -235,6 +310,16 @@ func (s *sseSink) Meta(m chat.MetaEvent) error {
 
 func (s *sseSink) Delta(content string) error {
 	return s.writeEvent("delta", sseDeltaPayload{Content: content})
+}
+
+func (s *sseSink) Status(ev chat.StatusEvent) error {
+	return s.writeEvent("status", sseStatusPayload{
+		RequestID: ev.RequestID,
+		Stage:     ev.Stage,
+		Message:   ev.Message,
+		Provider:  ev.Provider,
+		Model:     ev.Model,
+	})
 }
 
 func (s *sseSink) Done(requestID, assistantMessageID string) error {
@@ -338,6 +423,18 @@ func chatHandler(
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		// W1.1 (P1): system_prompt и review.system_prompts влияют на
+		// system-message LLM в обход sanitize-pipeline. Это даёт
+		// jailbreak-вектор и должно быть admin/developer-only. Проверка
+		// сделана ДО валидации review/provider, чтобы 403 превалировал
+		// над 400 (нельзя сообщать о деталях того, что не доступно).
+		if dto.containsSystemPromptOverrides() && !systemPromptWriteRoles[role] {
+			logger.Warn("system_prompt override отклонён по RBAC",
+				"role", role, "request_id", "n/a")
+			http.Error(w, "system_prompt доступен только admin/developer",
+				http.StatusForbidden)
+			return
+		}
 
 		provider, cerr := resolveProvider(r.Context(), store, llmRouter, dto.Provider)
 		if cerr != nil {
@@ -349,8 +446,14 @@ func chatHandler(
 			http.Error(w, cerr.message, cerr.code)
 			return
 		}
+		review, cerr := resolveReviewProviders(
+			r.Context(), store, llmRouter, provider.Name, dto.Review)
+		if cerr != nil {
+			http.Error(w, cerr.message, cerr.code)
+			return
+		}
 
-		chatReq := buildChatRequest(role, userID, dto, provider, session)
+		chatReq := buildChatRequest(role, userID, dto, provider, session, review)
 		// L: персональный ключ пользователя к провайдеру (если подключён) —
 		// используется вместо org-ключа; иначе org-ключ (fail-closed на ошибке).
 		if key := resolveUserKey(r.Context(), store, cipher, userID, provider.ID); key != "" {
@@ -612,12 +715,104 @@ func resolveSession(
 	return session, nil
 }
 
-// modelOrDefault возвращает имя модели либо имя провайдера по умолчанию.
-func modelOrDefault(model, provider string) string {
+func resolveReviewProviders(
+	ctx context.Context, store *storage.Storage, llmRouter *llm.Router,
+	primaryName string, dto *chatReviewParamsDTO,
+) (*chat.ReviewParams, *chatError) {
+	if dto == nil || !dto.Enabled {
+		return nil, nil
+	}
+	if len(dto.Providers) == 0 {
+		return nil, &chatError{
+			http.StatusBadRequest, "review.providers пуст"}
+	}
+	if len(dto.Providers) > _maxReviewProviders {
+		return nil, &chatError{
+			http.StatusBadRequest, "слишком много проверяющих моделей"}
+	}
+	providers, err := store.ListModelProviders(ctx)
+	if err != nil {
+		return nil, &chatError{
+			http.StatusInternalServerError, "ошибка чтения провайдеров"}
+	}
+	byName := make(map[string]storage.ModelProvider, len(providers))
+	for _, p := range providers {
+		byName[p.Name] = p
+	}
+	seen := make(map[string]bool, len(dto.Providers))
+	out := make([]chat.ReviewProvider, 0, len(dto.Providers))
+	for _, rawName := range dto.Providers {
+		name := strings.TrimSpace(rawName)
+		if name == "" {
+			continue
+		}
+		if name == primaryName {
+			return nil, &chatError{
+				http.StatusBadRequest,
+				"проверяющая модель должна отличаться от основной"}
+		}
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		p, ok := byName[name]
+		if !ok {
+			return nil, &chatError{
+				http.StatusBadRequest, "проверяющая модель не найдена"}
+		}
+		if !p.IsEnabled {
+			return nil, &chatError{
+				http.StatusBadRequest, "проверяющая модель отключена"}
+		}
+		if !llmRouter.Has(p.Name) {
+			return nil, &chatError{
+				http.StatusInternalServerError,
+				"проверяющая модель не зарегистрирована в маршрутизаторе"}
+		}
+		out = append(out, chat.ReviewProvider{
+			Name:         p.Name,
+			Model:        modelOrDefault("", p),
+			SystemPrompt: trimSystemPrompt(dto.SystemPrompts[name]),
+		})
+	}
+	if len(out) == 0 {
+		return nil, &chatError{
+			http.StatusBadRequest, "review.providers пуст"}
+	}
+	maxRounds := dto.MaxRounds
+	if maxRounds == 0 {
+		maxRounds = _defaultReviewRounds
+	}
+	return &chat.ReviewParams{
+		Enabled: true, Providers: out, MaxRounds: maxRounds,
+	}, nil
+}
+
+// modelOrDefault возвращает имя модели для chat-запроса.
+// Приоритет:
+//  1. явный model из DTO (если не пуст);
+//  2. provider.DefaultModel (миграция 000019 — хранится в БД и
+//     управляется через PATCH /api/models/:id);
+//  3. для adapter=ssh_cli адаптер сам подставит defaultSSHModelFor
+//     по endpoint (последний рубеж устойчивости — это в llm/ssh_cli.go,
+//     чтобы случайно пустая БД-конфигурация не валила запрос);
+//  4. иначе provider.Name (исторический fallback для
+//     openai_compatible/anthropic — там имя модели часто совпадает
+//     с именем провайдера).
+func modelOrDefault(model string, provider storage.ModelProvider) string {
 	if model != "" {
 		return model
 	}
-	return provider
+	if provider.DefaultModel != "" {
+		return provider.DefaultModel
+	}
+	if provider.Adapter == "ssh_cli" {
+		// Не подставляем provider.Name здесь — это сломает удалённый CLI
+		// (он ждёт real model id, а не codex-cli/gemini-cli). Пусть
+		// adapter сам решает (llm.normalizeSSHModel).
+		return ""
+	}
+	return provider.Name
 }
 
 // buildChatRequest собирает chat.Request из контекста аутентификации,
@@ -625,6 +820,7 @@ func modelOrDefault(model, provider string) string {
 func buildChatRequest(
 	role auth.Role, userID string, dto chatRequestDTO,
 	provider storage.ModelProvider, session storage.ChatSession,
+	review *chat.ReviewParams,
 ) chat.Request {
 	token := ""
 	if dto.PreviewToken != nil {
@@ -647,10 +843,16 @@ func buildChatRequest(
 		Provider:     provider.Name,
 		ProviderID:   provider.ID,
 		ModelTrust:   provider.TrustLevel,
-		Model:        modelOrDefault(dto.Model, provider.Name),
+		Model:        modelOrDefault(dto.Model, provider),
+		SystemPrompt: trimSystemPrompt(dto.SystemPrompt),
 		PreviewToken: token,
 		RAG:          rag,
+		Review:       review,
 	}
+}
+
+func trimSystemPrompt(s string) string {
+	return strings.TrimSpace(s)
 }
 
 // newRequestID генерирует UUID-v4 — коррелятор аудит-событий запроса.

@@ -16,6 +16,7 @@ import (
 	"github.com/rubezh-ai/rubezh-api/internal/config"
 	"github.com/rubezh-ai/rubezh-api/internal/crypto"
 	"github.com/rubezh-ai/rubezh-api/internal/llm"
+	"github.com/rubezh-ai/rubezh-api/internal/metrics"
 	"github.com/rubezh-ai/rubezh-api/internal/storage"
 )
 
@@ -90,20 +91,28 @@ func main() {
 		logger.Error("ошибка чтения провайдеров моделей", "error", err)
 		os.Exit(1)
 	}
-	llmRouter := buildRouter(providers, cfg.LLMAPIKey, mappingCipher, logger)
+	sshRunner := buildSSHRunner(cfg.SSHLLM, logger)
+	llmRouter := buildRouter(
+		providers, cfg.LLMAPIKey, mappingCipher, sshRunner, logger)
 	logger.Info("LLM Router инициализирован", "providers", llmRouter.Count())
 
 	// reloadRouter — hot-reload Router'а из БД после CREATE/UPDATE
 	// провайдера (F2). Атомарная подмена набора через Router.Replace.
+	// Замыкание дёргает metricsCollector.LLMRouterProviders, поэтому
+	// объявляется ПОСЛЕ создания metricsCollector (см. ниже).
+	var metricsCollector *metrics.Metrics
 	reloadRouter := func(ctx context.Context) error {
 		fresh, err := store.ListModelProviders(ctx)
 		if err != nil {
 			return fmt.Errorf("reload: %w", err)
 		}
 		llmRouter.Replace(buildProviders(
-			fresh, cfg.LLMAPIKey, mappingCipher, logger))
-		logger.Info("LLM Router перезагружен",
-			"providers", llmRouter.Count())
+			fresh, cfg.LLMAPIKey, mappingCipher, sshRunner, logger))
+		count := llmRouter.Count()
+		logger.Info("LLM Router перезагружен", "providers", count)
+		if metricsCollector != nil {
+			metricsCollector.LLMRouterProviders.Set(float64(count))
+		}
 		return nil
 	}
 
@@ -150,6 +159,14 @@ func main() {
 		"kind", cfg.Embedder.Kind, "model", embedder.Name(),
 		"dim", embedder.Dim())
 
+	// W4.1: Prometheus-инструментация. Создаём один экземпляр; роутер
+	// и orchestrator получают его через api.Deps.Metrics для Inc/Observe.
+	// metricsCollector — var выше (используется в reloadRouter-замыкании).
+	// W4 MJ-1: опциональная защита /metrics Bearer-токеном (env
+	// METRICS_SCRAPE_BEARER). Пусто → endpoint открыт.
+	metricsCollector = metrics.New().WithScrapeBearer(cfg.MetricsScrapeBearer)
+	metricsCollector.LLMRouterProviders.Set(float64(llmRouter.Count()))
+
 	handler, orchestrator := api.NewRouter(api.Deps{
 		Logger:        logger,
 		Store:         store,
@@ -162,6 +179,7 @@ func main() {
 		ReloadRouter:  reloadRouter,
 		OIDC:          oidcAuth,
 		RAGEnabled:    cfg.RAGEnabled,
+		Metrics:       metricsCollector,
 	})
 	srv := &http.Server{
 		Addr:              ":" + cfg.HTTPPort,
@@ -215,10 +233,11 @@ func main() {
 // в storage.ModelProvider.
 func buildRouter(
 	providers []storage.ModelProvider, envFallback string,
-	cipher *crypto.Cipher, logger *slog.Logger,
+	cipher *crypto.Cipher, sshRunner llm.SSHRunner, logger *slog.Logger,
 ) *llm.Router {
 	router := llm.NewRouter()
-	router.Replace(buildProviders(providers, envFallback, cipher, logger))
+	router.Replace(buildProviders(
+		providers, envFallback, cipher, sshRunner, logger))
 	return router
 }
 
@@ -229,7 +248,7 @@ func buildRouter(
 // Router.Replace.
 func buildProviders(
 	providers []storage.ModelProvider, envFallback string,
-	cipher *crypto.Cipher, logger *slog.Logger,
+	cipher *crypto.Cipher, sshRunner llm.SSHRunner, logger *slog.Logger,
 ) []llm.Provider {
 	out := make([]llm.Provider, 0, len(providers))
 	for _, provider := range providers {
@@ -253,11 +272,67 @@ func buildProviders(
 			}
 			out = append(out, llm.NewAnthropicProvider(
 				provider.Name, provider.Endpoint, key))
+		case "ssh_cli":
+			// Внешние LLM через CLI-bridge на удалённом сервере (Codex/
+			// Claude/Gemini/Grok CLI, залогинены серверной учёткой). API-
+			// ключи не используются: аутентификация на сервере, репозиторий
+			// не хранит секретов. fail-closed: без runner'а
+			// (SSH_LLM_ENABLED=false или неполный конфиг) — пропуск с warn.
+			if sshRunner == nil {
+				logger.Warn("ssh_cli провайдер пропущен — SSH-конфиг "+
+					"отключён или неполный (fail-closed)",
+					"provider", provider.Name, "id", provider.ID)
+				continue
+			}
+			if !llm.IsValidSSHProviderArg(provider.Endpoint) {
+				logger.Error("ssh_cli провайдер пропущен — endpoint вне "+
+					"белого списка (codex|claude|gemini|grok|grok-build)",
+					"provider", provider.Name, "endpoint", provider.Endpoint)
+				continue
+			}
+			out = append(out, llm.NewSSHCLIProvider(
+				provider.Name, provider.Endpoint, sshRunner, logger))
 		default:
 			out = append(out, llm.NewMockProvider(provider.Name))
 		}
 	}
 	return out
+}
+
+// buildSSHRunner создаёт production SSH-runner или nil, если adapter
+// ssh_cli отключён/недонастроен. nil здесь — нормальный путь: провайдеры
+// с adapter=ssh_cli не зарегистрируются в Router (fail-closed).
+// Ошибка инициализации runner'а при включенном SSH_LLM_ENABLED логируется
+// и тоже даёт nil — сервис стартует без ssh_cli, не падает целиком.
+func buildSSHRunner(
+	cfg config.SSHLLMConfig, logger *slog.Logger,
+) llm.SSHRunner {
+	if !cfg.Enabled {
+		logger.Info("ssh_cli: bridge отключён (SSH_LLM_ENABLED=false)")
+		return nil
+	}
+	if !cfg.Valid() {
+		logger.Warn("ssh_cli: bridge включён, но конфиг неполный — " +
+			"провайдеры ssh_cli не будут зарегистрированы")
+		return nil
+	}
+	runner, err := llm.NewSSHExecRunner(llm.SSHExecRunnerConfig{
+		Host:           cfg.Host,
+		Port:           cfg.Port,
+		User:           cfg.User,
+		KeyPath:        cfg.KeyPath,
+		KnownHostsPath: cfg.KnownHostsPath,
+		RemoteCommand:  cfg.RemoteCommand,
+		Timeout:        time.Duration(cfg.Timeout) * time.Second,
+	}, logger)
+	if err != nil {
+		logger.Error("ssh_cli: NewSSHExecRunner failed — "+
+			"провайдеры ssh_cli не зарегистрированы", "error", err)
+		return nil
+	}
+	logger.Info("ssh_cli: SSH-bridge runner готов",
+		"host", cfg.Host, "user", cfg.User, "cmd", cfg.RemoteCommand)
+	return runner
 }
 
 // resolveProviderKey расшифровывает api_key провайдера или возвращает

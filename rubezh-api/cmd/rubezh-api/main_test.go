@@ -49,7 +49,7 @@ func TestBuildRouter(t *testing.T) {
 		{Name: "ext", Adapter: "openai_compatible", Endpoint: "http://x", IsEnabled: true},
 		{Name: "off", Adapter: "mock", IsEnabled: false},
 	}
-	router := buildRouter(providers, "key", nil, discardTestLogger())
+	router := buildRouter(providers, "key", nil, nil, discardTestLogger())
 	if router.Count() != 2 {
 		t.Errorf("Count = %d, ожидалось 2 (отключённый провайдер пропущен)", router.Count())
 	}
@@ -72,7 +72,7 @@ func TestBuildRouterSelectsAdapterType(t *testing.T) {
 	router := buildRouter([]storage.ModelProvider{
 		{Name: "ext", Adapter: "openai_compatible", Endpoint: server.URL, IsEnabled: true},
 		{Name: "mck", Adapter: "mock", IsEnabled: true},
-	}, "key", nil, discardTestLogger())
+	}, "key", nil, nil, discardTestLogger())
 
 	ext, err := router.Complete(context.Background(), "ext",
 		llm.ChatRequest{Messages: []llm.ChatMessage{{Role: "user", Content: "x"}}})
@@ -87,7 +87,7 @@ func TestBuildRouterSelectsAdapterType(t *testing.T) {
 }
 
 func TestBuildRouterEmpty(t *testing.T) {
-	if buildRouter(nil, "k", nil, discardTestLogger()).Count() != 0 {
+	if buildRouter(nil, "k", nil, nil, discardTestLogger()).Count() != 0 {
 		t.Error("пустой список провайдеров → пустой роутер")
 	}
 }
@@ -95,7 +95,7 @@ func TestBuildRouterEmpty(t *testing.T) {
 func TestBuildRouterUnknownAdapterFallsBackToMock(t *testing.T) {
 	router := buildRouter([]storage.ModelProvider{
 		{Name: "x", Adapter: "future_adapter", IsEnabled: true},
-	}, "k", nil, discardTestLogger())
+	}, "k", nil, nil, discardTestLogger())
 	resp, _ := router.Complete(context.Background(), "x",
 		llm.ChatRequest{Messages: []llm.ChatMessage{{Role: "user", Content: "q"}}})
 	if !strings.Contains(resp.Content, "[mock]") {
@@ -163,6 +163,72 @@ func TestBuildEmbedderRejectsUnknownKind(t *testing.T) {
 	_, err := buildEmbedder(config.EmbedderConfig{Kind: "future-kind"})
 	if err == nil {
 		t.Fatal("ожидалась ошибка для unknown kind")
+	}
+}
+
+// fakeSSHRunner — заглушка для buildRouter-тестов ssh_cli.
+type fakeSSHRunner struct{}
+
+func (fakeSSHRunner) Run(_ context.Context, _ string, _ []byte) ([]byte, error) {
+	return []byte(`{"ok":true,"content":"x"}`), nil
+}
+
+func TestBuildProvidersRegistersSSHCLI(t *testing.T) {
+	providers := []storage.ModelProvider{
+		{Name: "codex-cli", Adapter: "ssh_cli", Endpoint: "codex", IsEnabled: true},
+		{Name: "grok-cli", Adapter: "ssh_cli", Endpoint: "grok", IsEnabled: false},
+	}
+	router := buildRouter(providers, "k", nil, fakeSSHRunner{}, discardTestLogger())
+	if !router.Has("codex-cli") {
+		t.Error("включённый ssh_cli провайдер не зарегистрирован")
+	}
+	if router.Has("grok-cli") {
+		t.Error("выключенный ssh_cli провайдер не должен регистрироваться")
+	}
+}
+
+func TestBuildProvidersSkipsSSHCLIWithoutRunner(t *testing.T) {
+	// SSH_LLM_ENABLED=false (или неполный конфиг) → sshRunner=nil →
+	// ssh_cli провайдеры пропускаются (fail-closed).
+	providers := []storage.ModelProvider{
+		{Name: "codex-cli", Adapter: "ssh_cli", Endpoint: "codex", IsEnabled: true},
+		{Name: "claude-code-cli", Adapter: "ssh_cli", Endpoint: "claude", IsEnabled: true},
+	}
+	router := buildRouter(providers, "k", nil, nil, discardTestLogger())
+	if router.Has("codex-cli") || router.Has("claude-code-cli") {
+		t.Error("ssh_cli провайдеры не должны регистрироваться без runner'а")
+	}
+	if router.Count() != 0 {
+		t.Errorf("Count = %d, ожидалось 0", router.Count())
+	}
+}
+
+func TestBuildProvidersSkipsSSHCLIWithBadEndpoint(t *testing.T) {
+	// Endpoint вне белого списка (codex|claude|gemini|grok) — пропуск.
+	providers := []storage.ModelProvider{
+		{Name: "bad", Adapter: "ssh_cli", Endpoint: "rm-rf", IsEnabled: true},
+	}
+	router := buildRouter(providers, "k", nil, fakeSSHRunner{}, discardTestLogger())
+	if router.Has("bad") {
+		t.Error("ssh_cli с невалидным endpoint не должен регистрироваться")
+	}
+}
+
+func TestBuildSSHRunnerDisabled(t *testing.T) {
+	r := buildSSHRunner(config.SSHLLMConfig{Enabled: false},
+		discardTestLogger())
+	if r != nil {
+		t.Error("при SSH_LLM_ENABLED=false runner должен быть nil")
+	}
+}
+
+func TestBuildSSHRunnerIncompleteConfig(t *testing.T) {
+	// Enabled=true, но без host — fail-closed (nil + warn-лог).
+	r := buildSSHRunner(config.SSHLLMConfig{
+		Enabled: true, Port: 22, RemoteCommand: "/usr/bin/x",
+	}, discardTestLogger())
+	if r != nil {
+		t.Error("неполный конфиг → nil runner (fail-closed)")
 	}
 }
 

@@ -41,8 +41,15 @@ type ModelProvider struct {
 	RateLimitPerMin *int
 	IsEnabled       bool
 	APIKeyEncrypted []byte
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	// DefaultModel — имя модели, передаваемое в LLM при пустом model
+	// в ChatRequest. Для adapter=ssh_cli это model id, который реально
+	// принимает CLI на удалённом сервере (миграция 000019). Пустая
+	// строка означает «адаптер сам решит» — fallback на defaults
+	// (для ssh_cli — defaultSSHModelFor по endpoint; для openai_compatible
+	// — provider.Name).
+	DefaultModel string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // HasAPIKey — есть ли зашифрованный ключ (для DTO и main-логики).
@@ -66,7 +73,7 @@ func (p ModelProvider) LogValue() slog.Value {
 // modelProviderColumns — список колонок SELECT (один источник для list/get).
 const modelProviderColumns = `id, name, trust_level, adapter,
 	COALESCE(endpoint, ''), max_tokens, rate_limit_per_min, is_enabled,
-	api_key_encrypted, created_at, updated_at`
+	api_key_encrypted, COALESCE(default_model, ''), created_at, updated_at`
 
 // ListModelProviders возвращает провайдеров моделей, отсортированных по имени.
 func (s *Storage) ListModelProviders(ctx context.Context) ([]ModelProvider, error) {
@@ -83,7 +90,7 @@ func (s *Storage) ListModelProviders(ctx context.Context) ([]ModelProvider, erro
 		if err := rows.Scan(
 			&p.ID, &p.Name, &p.TrustLevel, &p.Adapter, &p.Endpoint,
 			&p.MaxTokens, &p.RateLimitPerMin, &p.IsEnabled,
-			&p.APIKeyEncrypted, &p.CreatedAt, &p.UpdatedAt,
+			&p.APIKeyEncrypted, &p.DefaultModel, &p.CreatedAt, &p.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("storage: чтение строки провайдера: %w", err)
 		}
@@ -105,7 +112,7 @@ func (s *Storage) GetModelProvider(
 		id,
 	).Scan(&p.ID, &p.Name, &p.TrustLevel, &p.Adapter, &p.Endpoint,
 		&p.MaxTokens, &p.RateLimitPerMin, &p.IsEnabled,
-		&p.APIKeyEncrypted, &p.CreatedAt, &p.UpdatedAt)
+		&p.APIKeyEncrypted, &p.DefaultModel, &p.CreatedAt, &p.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ModelProvider{}, ErrModelProviderNotFound
 	}
@@ -135,11 +142,11 @@ func (s *Storage) CreateModelProvider(
 	err := s.pool.QueryRow(ctx,
 		`INSERT INTO model_providers
 		   (name, trust_level, adapter, endpoint, max_tokens,
-		    rate_limit_per_min, api_key_encrypted)
-		 VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7)
+		    rate_limit_per_min, api_key_encrypted, default_model)
+		 VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8)
 		 RETURNING id, is_enabled, created_at, updated_at`,
 		input.Name, input.TrustLevel, input.Adapter, input.Endpoint,
-		input.MaxTokens, input.RateLimitPerMin, apiKey,
+		input.MaxTokens, input.RateLimitPerMin, apiKey, input.DefaultModel,
 	).Scan(&created.ID, &created.IsEnabled, &created.CreatedAt, &created.UpdatedAt)
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -166,7 +173,7 @@ func (s *Storage) SetModelProviderEnabled(
 		id, enabled,
 	).Scan(&p.ID, &p.Name, &p.TrustLevel, &p.Adapter, &p.Endpoint,
 		&p.MaxTokens, &p.RateLimitPerMin, &p.IsEnabled,
-		&p.APIKeyEncrypted, &p.CreatedAt, &p.UpdatedAt)
+		&p.APIKeyEncrypted, &p.DefaultModel, &p.CreatedAt, &p.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ModelProvider{}, ErrModelProviderNotFound
 	}
@@ -193,6 +200,30 @@ func (s *Storage) DeleteModelProvider(ctx context.Context, id string) error {
 		return ErrModelProviderNotFound
 	}
 	return nil
+}
+
+// SetModelProviderDefaultModel обновляет default_model провайдера. Пустая
+// строка допустима — адаптер откатится к своему встроенному дефолту.
+// ErrModelProviderNotFound, если id не найден.
+func (s *Storage) SetModelProviderDefaultModel(
+	ctx context.Context, id, defaultModel string,
+) (ModelProvider, error) {
+	var p ModelProvider
+	err := s.pool.QueryRow(ctx,
+		`UPDATE model_providers SET default_model = $2, updated_at = now()
+		   WHERE id = $1
+		 RETURNING `+modelProviderColumns,
+		id, defaultModel,
+	).Scan(&p.ID, &p.Name, &p.TrustLevel, &p.Adapter, &p.Endpoint,
+		&p.MaxTokens, &p.RateLimitPerMin, &p.IsEnabled,
+		&p.APIKeyEncrypted, &p.DefaultModel, &p.CreatedAt, &p.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ModelProvider{}, ErrModelProviderNotFound
+	}
+	if err != nil {
+		return ModelProvider{}, fmt.Errorf("storage: set default_model: %w", err)
+	}
+	return p, nil
 }
 
 // UpdateModelProviderAPIKey обновляет зашифрованный ключ провайдера.
